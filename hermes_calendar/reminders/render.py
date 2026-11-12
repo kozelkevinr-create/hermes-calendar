@@ -43,6 +43,15 @@ _SLACK_MENTION = re.compile(r"<(?=[@#!])")
 # zero-width characters, full-width colons, and full-width bracket forms. We
 # replace the colon with U+2236 (a visible ratio-colon look-alike Hermes does
 # not match) and break the bracket pair with spaces; nothing is deleted.
+#
+# A second attachment path bypasses MEDIA entirely: BasePlatformAdapter.
+# extract_local_files (gateway/platforms/base.py lines 3253-3281) attaches any
+# bare absolute, ``~/`` or drive-letter path with a deliverable extension that
+# exists on disk, with no marker required. The path regex (lines 3265-3267)
+# needs a literal ``/`` or ``\\``, so user-controlled text replaces those with
+# U+2215 (division slash) and U+29F5 (reverse solidus operator). The
+# operator-configured dashboard URL footer is added after title sanitization and
+# is deliberately exempt.
 _GAP = r"[\s\u200b-\u200f\u2060\ufeff]*"
 _NAME_GAP = r"[\s_\-\u200b-\u200f\u2060\ufeff]*"
 _MEDIA_DIRECTIVE = re.compile(rf"(?i)M{_GAP}E{_GAP}D{_GAP}I{_GAP}A{_GAP}[:\uff1a\ufe55\ufe13]")
@@ -72,6 +81,18 @@ def _neutralize_bracket_directive(match: re.Match[str]) -> str:
     return f"[ [{name}] ]"
 
 
+def neutralize_paths(text: str) -> str:
+    """Break Hermes's bare-local-path detector while keeping text readable.
+
+    ``extract_local_files`` (``gateway/platforms/base.py`` lines 3253-3281)
+    extracts an existing absolute/``~/``/drive-letter path with a deliverable
+    extension even without a ``MEDIA:`` marker. Replacing the two path
+    separators with visible look-alikes defeats its regex's required literal
+    ``/``/``\\`` without deleting the title.
+    """
+    return text.replace("/", "\u2215").replace("\\", "\u29f5")
+
+
 def neutralize_directives(text: str) -> str:
     """Defuse Hermes ``MEDIA:``, ``[[as_document]]`` and ``[[audio_as_voice]]``.
 
@@ -90,6 +111,7 @@ def sanitize(text: str, *, cap: int = MAX_TITLE) -> str:
     cleaned = _CONTROL.sub(" ", cleaned)
     cleaned = _WHITESPACE.sub(" ", cleaned).strip()
     cleaned = neutralize_mentions(cleaned)
+    cleaned = neutralize_paths(cleaned)
     cleaned = neutralize_directives(cleaned)
     if len(cleaned) > cap:
         cleaned = cleaned[: cap - 1].rstrip() + "…"

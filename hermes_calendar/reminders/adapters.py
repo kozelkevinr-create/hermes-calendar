@@ -31,7 +31,7 @@ from typing import Any, Protocol
 
 from ..db.reminders import ChannelRow
 from .models import Availability, DeliveryResult, Notification
-from .render import neutralize_directives
+from .render import neutralize_directives, neutralize_paths
 
 _PERMANENT_HINTS = (
     "400",
@@ -175,7 +175,7 @@ class HermesSendAdapter:
         # Defense in depth for direct adapter callers: the engine renders a
         # sanitized title already, but no user-controlled string may reach the
         # chat with a surviving Hermes directive.
-        subject = neutralize_directives(subject)[:200]
+        subject = neutralize_paths(neutralize_directives(subject))[:200]
         body = neutralize_directives(notification.body)
         # Single-token option forms keep a title starting with '-' from being
         # parsed as an option by ``hermes send``'s argparse. The body is only

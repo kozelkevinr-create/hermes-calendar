@@ -8,9 +8,11 @@ at the revision used for the 2026-11-12 review:
 * ``MEDIA_EXTENSIONLESS_TAG_RE`` (lines 1248-1253);
 * ``_has_media_directives`` and ``extract_media`` (lines 1312 and 3203-3248).
 
-This copy is intentionally test-only. If Hermes changes the extraction, the
-plugin test must be updated alongside it; the production neutralizer cites the
-same source lines in ``hermes_calendar/reminders/render.py``.
+The bare-path detector ``extract_local_files`` (lines 3253-3281) is copied
+below as ``LOCAL_PATH_RE``. This copy is intentionally test-only. If Hermes
+changes the extraction, the plugin test must be updated alongside it; the
+production neutralizer cites the same source lines in
+``hermes_calendar/reminders/render.py``.
 """
 
 from __future__ import annotations
@@ -116,3 +118,25 @@ def directives_in(text: str) -> list[str]:
     found.extend(match.group(0) for match in MEDIA_EXTENSIONLESS_TAG_RE.finditer(text))
     found.extend(marker for marker in BRACKET_MARKERS if marker in text)
     return found
+
+
+# Copied from BasePlatformAdapter.extract_local_files (base.py lines 3253-3281):
+# this detector has no MEDIA marker and attaches any existing absolute, ~/ or
+# drive-letter path whose extension is deliverable.
+_LOCAL_EXT_PART = "|".join(item.lstrip(".") for item in MEDIA_DELIVERY_EXTS)
+LOCAL_PATH_RE = re.compile(
+    r"(?<![/:\w.])(?:~/|/|[A-Za-z]:[/\\])(?:[\w.\-]+[/\\])*[\w.\-]+\.(?:"
+    + _LOCAL_EXT_PART
+    + r")\b",
+    re.IGNORECASE,
+)
+
+
+def local_path_candidates(text: str) -> list[str]:
+    """Return bare local path candidates exactly as Hermes's path regex sees them."""
+    return [match.group(0) for match in LOCAL_PATH_RE.finditer(text)]
+
+
+def extracted_attachments(text: str) -> list[str]:
+    """Return both MEDIA/bracket directives and bare local-path candidates."""
+    return [*directives_in(text), *local_path_candidates(text)]
