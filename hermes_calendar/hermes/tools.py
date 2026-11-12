@@ -559,7 +559,7 @@ _LIST_NOTIFICATIONS_SCHEMA = _schema(
 
 _SNOOZE_NOTIFICATION_SCHEMA = _schema(
     "calendar_snooze_notification",
-    "Snooze a reminder so it fires again after 5, 10, or 60 minutes. The "
+    "Snooze a reminder so it fires again after 5, 15, 60, or 1440 minutes. The "
     "reminder returns to the scheduled state and a later tick delivers it once. "
     "Use the id from calendar_list_notifications.",
     {
@@ -569,7 +569,7 @@ _SNOOZE_NOTIFICATION_SCHEMA = _schema(
         },
         "minutes": {
             "type": "integer",
-            "enum": [5, 10, 60],
+            "enum": sorted(reminder_service.SNOOZE_MINUTES),
             "description": "Snooze duration in minutes. Required.",
         },
     },
@@ -589,23 +589,6 @@ _DISMISS_NOTIFICATION_SCHEMA = _schema(
     },
     ("notification_id",),
 )
-
-
-@contextmanager
-def _notification_connections() -> Iterator[tuple[sqlite3.Connection, sqlite3.Connection | None]]:
-    """Open the profile store and, best-effort, the shared global store."""
-    profile_connection = open_profile_store()
-    global_connection: sqlite3.Connection | None = None
-    try:
-        try:
-            global_connection = open_global_store()
-        except (DatabaseError, sqlite3.Error):
-            global_connection = None
-        yield profile_connection, global_connection
-    finally:
-        if global_connection is not None:
-            global_connection.close()
-        profile_connection.close()
 
 
 def _require_str(args: Mapping[str, Any], name: str) -> str:
@@ -667,7 +650,7 @@ def calendar_list_notifications(args: Mapping[str, Any]) -> dict[str, Any]:
     limit = _optional_int(args, "limit", minimum=1)
     effective_limit = 20 if limit is None else min(limit, 100)
     state = _notification_state(args)
-    with _notification_connections() as (profile_connection, global_connection):
+    with reminder_service.notification_stores() as (profile_connection, global_connection):
         notifications = reminder_service.list_notifications(
             profile_connection,
             global_connection=global_connection,
@@ -680,12 +663,13 @@ def calendar_list_notifications(args: Mapping[str, Any]) -> dict[str, Any]:
 
 @_tool
 def calendar_snooze_notification(args: Mapping[str, Any]) -> dict[str, Any]:
-    """Snooze one notification for 5, 10, or 60 minutes."""
+    """Snooze one notification for an allowlisted duration."""
     notification_id = _require_str(args, "notification_id")
     minutes = _require_int(args, "minutes", minimum=5)
     if minutes not in reminder_service.SNOOZE_MINUTES:
-        raise ToolArgumentError("minutes must be one of 5, 10, 60")
-    with _notification_connections() as (profile_connection, global_connection):
+        allowed = ", ".join(str(item) for item in sorted(reminder_service.SNOOZE_MINUTES))
+        raise ToolArgumentError(f"minutes must be one of {allowed}")
+    with reminder_service.notification_stores() as (profile_connection, global_connection):
         notification = reminder_service.snooze_notification(
             profile_connection,
             notification_id=notification_id,
@@ -699,7 +683,7 @@ def calendar_snooze_notification(args: Mapping[str, Any]) -> dict[str, Any]:
 def calendar_dismiss_notification(args: Mapping[str, Any]) -> dict[str, Any]:
     """Dismiss (acknowledge) one notification."""
     notification_id = _require_str(args, "notification_id")
-    with _notification_connections() as (profile_connection, global_connection):
+    with reminder_service.notification_stores() as (profile_connection, global_connection):
         notification = reminder_service.dismiss_notification(
             profile_connection,
             notification_id=notification_id,

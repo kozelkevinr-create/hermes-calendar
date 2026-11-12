@@ -16,6 +16,7 @@ from hermes_calendar.hermes.tools import (
     calendar_list_notifications,
     calendar_snooze_notification,
 )
+from hermes_calendar.reminders import service as reminder_service
 from tests.unit.reminder_support import (
     FakeClock,
     create_calendar,
@@ -80,7 +81,7 @@ def test_list_rejects_an_unknown_state(delivered: tuple[str, str]) -> None:
 def test_snooze_then_list_and_dismiss(delivered: tuple[str, str]) -> None:
     instance_id, _ = delivered
     snoozed = _payload(
-        calendar_snooze_notification({"notification_id": instance_id, "minutes": 10})
+        calendar_snooze_notification({"notification_id": instance_id, "minutes": 15})
     )
     assert snoozed["ok"] is True
     assert snoozed["notification"]["state"] == "scheduled"
@@ -112,7 +113,7 @@ def test_list_degrades_when_the_global_store_cannot_open(
     def failing_open() -> None:
         raise sqlite3.OperationalError("global locked")
 
-    monkeypatch.setattr(hermes_tools, "open_global_store", failing_open)
+    monkeypatch.setattr(reminder_service, "open_global_store", failing_open)
     payload = _payload(calendar_list_notifications({}))
     assert payload["ok"] is True
     assert payload["count"] == 1
@@ -157,3 +158,12 @@ def test_notification_argument_validation_edges(
     assert payload["code"] == "invalid_argument"
     payload = _payload(calendar_snooze_notification({"notification_id": "id", "minutes": 4}))
     assert payload["code"] == "invalid_argument"
+
+
+def test_snooze_schema_uses_the_shared_allowlist() -> None:
+    schema = next(
+        spec[1] for spec in hermes_tools.TOOL_SPECS if spec[0] == "calendar_snooze_notification"
+    )
+
+    assert schema["parameters"]["properties"]["minutes"]["enum"] == [5, 15, 60, 1440]
+    assert sorted(reminder_service.SNOOZE_MINUTES) == [5, 15, 60, 1440]

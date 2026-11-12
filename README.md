@@ -123,16 +123,42 @@ port, service, or password.
    If no rescan is possible, let the operator restart the dashboard through their normal
    service manager. Do not hand-start a second `hermes dashboard`; it competes for the port.
 
-3. Open the dashboard, sign in, and choose **Calendar** in the navigation. The page shows a
-   month view and an agenda list. Use the **Profile** / **Shared (global)** switch to choose
-   a private profile store or the shared global calendar. New events default to the
-   browser's timezone, which is displayed above the form.
+3. Open the dashboard, sign in, and choose **Calendar** in the navigation. The page has
+   two internal tabs: **Calendar** and **Notifications** (with an unread badge). The
+   Calendar tab shows a month view and an agenda list. Use the **Profile** / **Shared
+   (global)** switch to choose a private profile store or the shared global calendar. New
+   events default to the browser's timezone, which is displayed above the form.
+
+### Notification centre and reminder setup
+
+Open the **Notifications** tab to see reminders that the engine has materialized for this
+profile. Each row shows only the stored, chat-sanitized title plus its state, fire or snooze
+time, priority, and latest delivery outcome. Use **Dismiss** to acknowledge one, or
+**5 min / 15 min / 1 hour / 1 day** to snooze it; a later tick delivers it again. The tab
+badge is the count of notifications that have not been dismissed. The list pages 20 at a
+time; the API caps a page at 100 rows and an offset at 10,000.
+
+The **Reminder setup** section below the list is read-only diagnostics:
+
+- **Delivery target** says whether an explicit external channel target is configured. It
+  never shows the target value.
+- **Last tick** is when the profile's reminder engine last ran.
+- **Cron safety net** reports whether a tick landed within the last three minutes. A recent
+  tick can come from `hermes cron` or the optional in-process ticker.
+- **In-process ticker** shows whether the accelerator is enabled and its interval.
+- **Doctor checks** summarizes the same checks as `python -m hermes_calendar reminders
+  doctor`, including the profile store, external channel, `hermes` binary, and global lease.
+
+To set reminders up, follow the numbered steps in that section. They repeat the exact
+`hermes cron create ...` command from the plugin's cron helper and show the tick script it
+runs. Both blocks have a copy button. **This page never creates a cron job, sends a message,
+or restarts the dashboard or gateway**; the operator runs the steps themselves. After a
+tick appears, press **Refresh status** to confirm it.
 
 The backend routes live at `/api/plugins/hermes-calendar/` and are mounted only while the
 plugin is enabled. The JS/CSS bundle is hand-written (no build step) and the dashboard
 provides FastAPI/httpx at runtime, so the plugin itself has no additional runtime
-dependency. The notification panel is intentionally left as an empty, labelled slot; the
-reminder engine that fills it is a separate task.
+dependency.
 
 Dashboard route tests use `FastAPI`'s `TestClient`; `fastapi` and `httpx` are **development
 dependencies only** and are not declared as plugin runtime dependencies.

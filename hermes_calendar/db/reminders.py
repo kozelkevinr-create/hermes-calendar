@@ -750,12 +750,13 @@ class ReminderStore:
         *,
         states: tuple[str, ...] | None = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[ReminderInstance]:
-        """Return instances newest-first, optionally filtered by state."""
+        """Return one page of instances newest-first, filtered by state."""
         if states is None:
             rows = self._connection.execute(
-                "SELECT * FROM reminder_instances ORDER BY fire_at_utc DESC, id LIMIT ?",
-                (limit,),
+                "SELECT * FROM reminder_instances ORDER BY fire_at_utc DESC, id LIMIT ? OFFSET ?",
+                (limit, offset),
             ).fetchall()
         else:
             placeholders = ", ".join("?" for _ in states)
@@ -764,11 +765,23 @@ class ReminderStore:
                 SELECT * FROM reminder_instances
                  WHERE state IN ({placeholders})
                  ORDER BY fire_at_utc DESC, id
-                 LIMIT ?
+                 LIMIT ? OFFSET ?
                 """,
-                (*states, limit),
+                (*states, limit, offset),
             ).fetchall()
         return [_instance_from_row(row) for row in rows]
+
+    def count_instances(self, *, states: tuple[str, ...] | None = None) -> int:
+        """Count instances, optionally filtered by state, for pagination totals."""
+        if states is None:
+            row = self._connection.execute("SELECT COUNT(*) FROM reminder_instances").fetchone()
+        else:
+            placeholders = ", ".join("?" for _ in states)
+            row = self._connection.execute(
+                f"SELECT COUNT(*) FROM reminder_instances WHERE state IN ({placeholders})",
+                states,
+            ).fetchone()
+        return 0 if row is None else int(row[0])
 
     # ------------------------------------------------------- preferences/channels
 
