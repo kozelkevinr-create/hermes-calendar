@@ -47,7 +47,7 @@ hermes_calendar = ["py.typed"]
 target-version = "py311"
 line-length = 100
 src = ["."]
-extend-exclude = [".venv", "build", "dist"]
+extend-exclude = [".venv", "build", "dist", "docs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "C4", "PT", "SIM", "UP"]
