@@ -751,36 +751,48 @@ class ReminderStore:
         states: tuple[str, ...] | None = None,
         limit: int = 50,
         offset: int = 0,
+        since: int | None = None,
     ) -> list[ReminderInstance]:
-        """Return one page of instances newest-first, filtered by state."""
-        if states is None:
-            rows = self._connection.execute(
-                "SELECT * FROM reminder_instances ORDER BY fire_at_utc DESC, id LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
-        else:
+        """Return one page of instances newest-first, filtered by state and ``since``.
+
+        ``since`` keeps rows whose ``updated_utc`` is strictly greater than the
+        supplied epoch second, which is what incremental notification polling
+        needs; the ordering is unchanged.
+        """
+        conditions: list[str] = []
+        parameters: list[Any] = []
+        if states is not None:
             placeholders = ", ".join("?" for _ in states)
-            rows = self._connection.execute(
-                f"""
-                SELECT * FROM reminder_instances
-                 WHERE state IN ({placeholders})
-                 ORDER BY fire_at_utc DESC, id
-                 LIMIT ? OFFSET ?
-                """,
-                (*states, limit, offset),
-            ).fetchall()
+            conditions.append(f"state IN ({placeholders})")
+            parameters.extend(states)
+        if since is not None:
+            conditions.append("updated_utc > ?")
+            parameters.append(since)
+        where = "" if not conditions else " WHERE " + " AND ".join(conditions)
+        rows = self._connection.execute(
+            f"SELECT * FROM reminder_instances{where} "
+            "ORDER BY fire_at_utc DESC, id LIMIT ? OFFSET ?",
+            (*parameters, limit, offset),
+        ).fetchall()
         return [_instance_from_row(row) for row in rows]
 
-    def count_instances(self, *, states: tuple[str, ...] | None = None) -> int:
-        """Count instances, optionally filtered by state, for pagination totals."""
-        if states is None:
-            row = self._connection.execute("SELECT COUNT(*) FROM reminder_instances").fetchone()
-        else:
+    def count_instances(
+        self, *, states: tuple[str, ...] | None = None, since: int | None = None
+    ) -> int:
+        """Count instances matching the same state/``since`` filters as the page."""
+        conditions: list[str] = []
+        parameters: list[Any] = []
+        if states is not None:
             placeholders = ", ".join("?" for _ in states)
-            row = self._connection.execute(
-                f"SELECT COUNT(*) FROM reminder_instances WHERE state IN ({placeholders})",
-                states,
-            ).fetchone()
+            conditions.append(f"state IN ({placeholders})")
+            parameters.extend(states)
+        if since is not None:
+            conditions.append("updated_utc > ?")
+            parameters.append(since)
+        where = "" if not conditions else " WHERE " + " AND ".join(conditions)
+        row = self._connection.execute(
+            f"SELECT COUNT(*) FROM reminder_instances{where}", parameters
+        ).fetchone()
         return 0 if row is None else int(row[0])
 
     # ------------------------------------------------------- preferences/channels

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -106,6 +107,19 @@ def list_events(
 
 
 # ----------------------------------------------------------------------- status
+
+
+def test_version_reports_the_stable_api_contract(client: TestClient) -> None:
+    response = client.get(PREFIX + "/version")
+
+    assert response.status_code == 200
+    body = payload(response)
+    assert body["ok"] is True
+    assert body["api_version"] == "1"
+    manifest = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "plugin.yaml").read_text(encoding="utf-8")
+    )
+    assert body["plugin_version"] == manifest["version"]
 
 
 def test_status_reuses_calendar_status_and_reports_the_shared_store(

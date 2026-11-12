@@ -16,6 +16,8 @@ decision changes.
 | `design/core.md` | Event model, SQLite schema, recurrence, change log |
 | `design/sync.md` | Sync engine, remote providers, conflict handling |
 | `design/app-notifications.md` | Reminder scheduling and delivery |
+| `api/dashboard-api.md` | Dashboard HTTP contract for native clients (api_version 1) |
+| `api/openapi.json` | Generated OpenAPI schema for the dashboard routes |
 
 ## Conventions
 

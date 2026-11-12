@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -109,6 +110,20 @@ def store_prefs(**values: Any) -> None:
         connection.close()
 
 
+def first_notification(client: TestClient) -> dict[str, Any]:
+    """Return the first visible notification payload."""
+    body = payload(client.get(PREFIX + "/notifications", params={"limit": 100}))
+    items = cast(list[dict[str, Any]], body["notifications"])
+    assert items
+    return items[0]
+
+
+def updated_epoch(item: dict[str, Any]) -> int:
+    """Read the epoch half of a notification's ``updated_at`` object."""
+    updated = cast(dict[str, Any], item["updated_at"])
+    return int(updated["epoch"])
+
+
 # ------------------------------------------------------------------ listing
 
 
@@ -180,6 +195,91 @@ def test_notifications_validates_pagination_and_filters(client: TestClient) -> N
     visible = payload(client.get(PREFIX + "/notifications", params={"include_dismissed": "true"}))
     assert after["total"] == hidden["total"] - 1
     assert visible["total"] == hidden["total"]
+
+
+# ------------------------------------------------------- incremental polling
+
+
+def test_notifications_carry_updated_at_and_server_time(client: TestClient) -> None:
+    seed_notifications()
+
+    body = payload(client.get(PREFIX + "/notifications"))
+
+    server_time = cast(dict[str, Any], body["server_time"])
+    assert int(server_time["epoch"]) > 0
+    assert str(server_time["iso"]).endswith("Z")
+    for item in cast(list[dict[str, Any]], body["notifications"]):
+        updated = cast(dict[str, Any], item["updated_at"])
+        assert int(updated["epoch"]) > 0
+        assert str(updated["iso"]).endswith("Z")
+        assert datetime.fromisoformat(str(updated["iso"]).replace("Z", "+00:00")) == (
+            datetime.fromtimestamp(int(updated["epoch"]), UTC)
+        )
+
+
+def test_since_filters_strictly_and_accepts_epoch_or_offset_iso(client: TestClient) -> None:
+    seed_notifications()
+    epoch = updated_epoch(first_notification(client))
+
+    equal = payload(client.get(PREFIX + "/notifications", params={"since": str(epoch)}))
+    before = payload(client.get(PREFIX + "/notifications", params={"since": str(epoch - 1)}))
+    after = payload(client.get(PREFIX + "/notifications", params={"since": str(epoch + 1)}))
+    iso_equal = payload(
+        client.get(
+            PREFIX + "/notifications",
+            params={"since": datetime.fromtimestamp(epoch, UTC).isoformat()},
+        )
+    )
+    offset = datetime.fromtimestamp(epoch, timezone(timedelta(hours=-5))).isoformat()
+    iso_offset = payload(client.get(PREFIX + "/notifications", params={"since": offset}))
+
+    assert (equal["count"], equal["total"]) == (0, 0)
+    assert (before["count"], before["total"]) == (6, 6)
+    assert (after["count"], after["total"]) == (0, 0)
+    assert iso_equal["total"] == 0
+    assert iso_offset["total"] == 0
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "not-a-time",
+        "2026-03-02T09:00:00",
+        "2026-13-02T09:00:00Z",
+        "9" * 17,
+        "2" * 65,
+    ],
+)
+def test_since_rejects_invalid_values(client: TestClient, value: str) -> None:
+    seed_notifications(count=1, global_event=False)
+
+    response = client.get(PREFIX + "/notifications", params={"since": value})
+
+    assert response.status_code == 400
+    body = payload(response)
+    assert body["ok"] is False
+    assert body["code"] == "invalid_argument"
+    assert "since" in body["error"]
+
+
+def test_since_keeps_existing_filters_and_adds_no_fields_to_other_routes(
+    client: TestClient,
+) -> None:
+    seed_notifications(count=2, global_event=False)
+    epoch = updated_epoch(first_notification(client))
+
+    filtered = payload(
+        client.get(
+            PREFIX + "/notifications",
+            params={"since": str(epoch - 1), "state": "delivered", "limit": 1},
+        )
+    )
+
+    assert filtered["count"] == 1
+    assert filtered["total"] == 2
+    assert filtered["limit"] == 1
+    assert filtered["offset"] == 0
 
 
 # ---------------------------------------------------------------- dismissal
@@ -294,6 +394,56 @@ def test_snooze_works_for_a_global_calendar_notification(client: TestClient) -> 
 
     assert response.status_code == 200
     assert payload(response)["notification"]["state"] == "scheduled"
+
+
+def test_snooze_and_dismiss_bump_updated_at(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_notifications(count=1, global_event=False)
+    item = first_notification(client)
+    notification_id = str(item["id"])
+    before = updated_epoch(item)
+
+    monkeypatch.setattr(time, "time", lambda: BASE + 10_000)
+    snoozed = payload(
+        client.post(
+            PREFIX + "/notifications/" + notification_id + "/snooze",
+            json={"minutes": 15},
+        )
+    )["notification"]
+
+    monkeypatch.setattr(time, "time", lambda: BASE + 20_000)
+    dismissed = payload(client.post(PREFIX + "/notifications/" + notification_id + "/dismiss"))[
+        "notification"
+    ]
+
+    assert updated_epoch(snoozed) == BASE + 10_000
+    assert updated_epoch(dismissed) == BASE + 20_000
+    assert updated_epoch(snoozed) > before
+    assert updated_epoch(dismissed) > updated_epoch(snoozed)
+
+
+def test_since_returns_a_dismissed_state_change_when_requested(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_notifications(count=1, global_event=False)
+    item = first_notification(client)
+    epoch = updated_epoch(item)
+
+    monkeypatch.setattr(time, "time", lambda: BASE + 10_000)
+    assert client.post(PREFIX + "/notifications/" + str(item["id"]) + "/dismiss").status_code == 200
+
+    hidden = payload(client.get(PREFIX + "/notifications", params={"since": str(epoch)}))
+    visible = payload(
+        client.get(
+            PREFIX + "/notifications",
+            params={"since": str(epoch), "include_dismissed": "true"},
+        )
+    )
+
+    assert hidden["total"] == 0
+    assert visible["total"] == 1
+    assert visible["notifications"][0]["state"] == "acknowledged"
 
 
 # --------------------------------------------------------------- doctor/status

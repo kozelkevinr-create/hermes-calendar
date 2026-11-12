@@ -45,6 +45,8 @@ implementation. These are the source of truth for their areas:
 | `docs/design/core.md` | Event model, SQLite schema, recurrence, change log |
 | `docs/design/sync.md` | Sync engine, remote providers, conflict handling |
 | `docs/design/app-notifications.md` | Reminder scheduling and notification delivery |
+| `docs/api/dashboard-api.md` | Dashboard HTTP contract for native clients (api_version 1) |
+| `docs/api/openapi.json` | Generated OpenAPI schema for the dashboard routes |
 
 If a design and this README disagree, the design document wins; update the README in the
 same PR.
