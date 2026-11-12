@@ -32,7 +32,9 @@ response fields and must not treat a missing optional field as an error.
 | GET | `/reminders/status` | Reminder-setup diagnostics. |
 
 The machine-readable schema is [`openapi.json`](openapi.json), regenerated from the router
-with `python scripts/export_openapi.py`.
+with `python scripts/export_openapi.py`. `python scripts/export_openapi.py --check` compares
+the checked-in file's normalized contract (paths, methods, parameters, and response status
+codes) and works from a plain checkout without installing the package.
 
 ## Authentication
 
