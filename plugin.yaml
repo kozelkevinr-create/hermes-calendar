@@ -17,4 +17,11 @@ tags:
 # Hermes validates this drift, so add to both lists when a surface lands.
 provides_tools:
   - calendar_status
+  - calendar_list_calendars
+  - calendar_create_calendar
+  - calendar_create_event
+  - calendar_get_event
+  - calendar_update_event
+  - calendar_delete_event
+  - calendar_list_events
 provides_hooks: []

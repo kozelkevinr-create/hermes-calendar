@@ -13,7 +13,10 @@ from typing import Any
 import pytest
 
 from hermes_calendar import __version__
+from hermes_calendar.hermes.tools import TOOL_SPECS
 from hermes_calendar.plugin import calendar_status, register
+
+EXPECTED_TOOLS = {"calendar_status"} | {spec[0] for spec in TOOL_SPECS}
 
 
 class FakeContext:
@@ -26,20 +29,17 @@ class FakeContext:
         self.tools.append(kwargs)
 
 
-def test_register_registers_calendar_status(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_register_registers_calendar_tools(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "root" / "profiles" / "work"))
     ctx = FakeContext()
 
     register(ctx)
 
-    assert len(ctx.tools) == 1
-    tool = ctx.tools[0]
-    assert tool["name"] == "calendar_status"
-    assert tool["toolset"] == "calendar"
-    assert tool["schema"]["name"] == "calendar_status"
-    assert callable(tool["handler"])
+    assert {tool["name"] for tool in ctx.tools} == EXPECTED_TOOLS
+    status = next(tool for tool in ctx.tools if tool["name"] == "calendar_status")
+    assert status["toolset"] == "calendar"
+    assert status["schema"]["name"] == "calendar_status"
+    assert callable(status["handler"])
 
 
 def test_calendar_status_reports_paths_and_missing_databases(
