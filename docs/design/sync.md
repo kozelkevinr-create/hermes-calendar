@@ -1287,8 +1287,9 @@ is superseded, or the user discards it.
 - **CalDAV:** a thin WebDAV/XML layer over the shared HTTP client is enough.
   Do not adopt a full DAV framework; it will fight the sync engine's cursor and
   retry model.
-- **OAuth:** use the platform SDKs where they exist (Google Identity
-  `AuthorizationClient`, MSAL for Microsoft web/device flows). Do not hand-roll
+- **OAuth:** use maintained Python libraries where they exist (for
+  example `google-auth-oauthlib` for the Google Desktop app flow, MSAL for Microsoft
+  web/device flows). Do not hand-roll
   token refresh or browser handling.
 - **HTTP:** one client with explicit timeouts, redirect policy, proxy support,
   per-account custom CA, and redacted request logging. Every adapter shares it.
