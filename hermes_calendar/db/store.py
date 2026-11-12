@@ -12,13 +12,13 @@ import sqlite3
 import time
 from pathlib import Path
 
-from hermes_calendar.db.migrations import (
+from ..plugin_storage import global_dir, profile_dir
+from ..plugin_storage import open_db as open_db
+from .migrations import (
     GLOBAL_STORE_ID,
     StoreScope,
     migrate,
 )
-from hermes_calendar.plugin_storage import global_dir, profile_dir
-from hermes_calendar.plugin_storage import open_db as open_db
 
 PLUGIN_NAME = "hermes-calendar"
 PROFILE_DB_FILENAME = "calendar.db"

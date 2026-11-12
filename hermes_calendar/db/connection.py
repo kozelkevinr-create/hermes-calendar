@@ -18,7 +18,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from hermes_calendar.plugin_storage import open_db
+from ..plugin_storage import open_db
 
 
 def connect(database: str | Path = ":memory:") -> sqlite3.Connection:

@@ -17,9 +17,9 @@ ICS is one-way (``docs/design/sync.md`` §3.5): there is no writeback path.
 
 from __future__ import annotations
 
-from hermes_calendar.ics._common import MAX_EVENTS, MAX_ICS_BYTES, IcsLimitError
-from hermes_calendar.ics.parser import ParseResult, parse_ics
-from hermes_calendar.ics.serializer import serialize_events
+from ._common import MAX_EVENTS, MAX_ICS_BYTES, IcsLimitError
+from .parser import ParseResult, parse_ics
+from .serializer import serialize_events
 
 __all__ = [
     "MAX_EVENTS",

@@ -50,7 +50,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from hermes_calendar.db import (
+from ..db import (
     CalendarNotFoundError,
     DatabaseError,
     EventNotFoundError,
@@ -61,8 +61,8 @@ from hermes_calendar.db import (
     open_profile_store,
     profile_name,
 )
-from hermes_calendar.models import Calendar, Event, EventDraft
-from hermes_calendar.plugin_storage import profile_dir
+from ..models import Calendar, Event, EventDraft
+from ..plugin_storage import profile_dir
 
 PLUGIN_NAME = "hermes-calendar"
 TOOLSET = "calendar"

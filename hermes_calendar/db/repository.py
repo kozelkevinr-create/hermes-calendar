@@ -19,13 +19,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any, Literal, cast
 
-from hermes_calendar.db.errors import (
-    CalendarNotFoundError,
-    EventNotFoundError,
-    RevisionConflict,
-    SourceNotFoundError,
-)
-from hermes_calendar.models import (
+from ..models import (
     Attendee,
     Calendar,
     Event,
@@ -33,6 +27,12 @@ from hermes_calendar.models import (
     Reminder,
     Source,
     new_uuid7,
+)
+from .errors import (
+    CalendarNotFoundError,
+    EventNotFoundError,
+    RevisionConflict,
+    SourceNotFoundError,
 )
 
 Origin = Literal["local", "remote", "system"]

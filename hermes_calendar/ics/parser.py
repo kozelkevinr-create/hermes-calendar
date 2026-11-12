@@ -24,7 +24,8 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from hermes_calendar.ics._common import (
+from ..models import Attendee, EventDraft, Reminder
+from ._common import (
     MAX_EVENTS,
     MAX_ICS_BYTES,
     IcsLimitError,
@@ -35,7 +36,6 @@ from hermes_calendar.ics._common import (
     unescape_text,
     unquote,
 )
-from hermes_calendar.models import Attendee, EventDraft, Reminder
 
 _DEFAULT_ROLE = "REQ-PARTICIPANT"
 _DEFAULT_PARTSTAT = "NEEDS-ACTION"
