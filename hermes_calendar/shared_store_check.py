@@ -20,11 +20,13 @@ from __future__ import annotations
 
 import contextlib
 import os
+import random
 import re
 import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from .plugin_storage import global_dir, open_db
 
@@ -33,6 +35,10 @@ __all__ = ["SharedStoreStatus", "verify_shared"]
 _ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 _DB_FILENAME = "_shared_check.db"
 _POLL_INTERVAL_S = 0.02
+_RETRY_BUDGET_S = 3.0
+_RETRY_BASE_S = 0.05
+_RETRY_MAX_S = 1.0
+_RETRY_JITTER = 0.25
 _CREATE_TABLE = (
     "CREATE TABLE IF NOT EXISTS shared_sentinel ("
     "profile_id TEXT PRIMARY KEY, "
@@ -92,6 +98,7 @@ def verify_shared(
     wait_s: float = 0.0,
     stale_after_s: float = 300.0,
     clock: Callable[[], float] = time.time,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> SharedStoreStatus:
     """Probe a plugin's shared data directory and register this profile.
 
@@ -101,12 +108,18 @@ def verify_shared(
     crashed profile cannot keep the store looking shared. With ``wait_s > 0``
     the probe keeps reading until it sees a fresh peer or the budget runs out.
 
+    Several profiles may start against a brand-new database at the same moment,
+    so a transient ``database is locked``/``busy`` during the initial WAL
+    switch or table creation is retried with bounded exponential backoff and
+    jitter. Only an exhausted retry budget surfaces as ``ok=False``.
+
     Args:
         plugin_name: Plugin data directory name; letters, digits, ``-``, ``_``.
         profile_id: This profile's id; validated like a plugin name.
         wait_s: Seconds to keep polling for another profile. Zero reads once.
         stale_after_s: Age in seconds after which a peer sentinel is ignored.
-        clock: Time source for sentinel timestamps, injectable for tests.
+        clock: Time source for sentinel timestamps and the retry budget.
+        sleep: Sleep function used by retry backoff; injectable for tests.
 
     Returns:
         A :class:`SharedStoreStatus`. Every failure, including an invalid
@@ -142,8 +155,7 @@ def verify_shared(
     connection: sqlite3.Connection | None = None
     writable = False
     try:
-        connection = open_db(directory / _DB_FILENAME)
-        _register(connection, profile_id, clock())
+        connection = _open_registered(directory, profile_id, clock, sleep)
         writable = True
         observation = _observe(connection, profile_id, clock(), stale_after)
         if observation.shared is not True and wait > 0.0:
@@ -159,10 +171,7 @@ def verify_shared(
     except Exception as exc:  # noqa: BLE001 - the probe contract is never to raise
         return SharedStoreStatus(False, None, (), writable, _failure_detail(exc))
     finally:
-        if connection is not None:
-            # A failing close must not hide the result the probe already has.
-            with contextlib.suppress(Exception):
-                connection.close()
+        _close_quietly(connection)
 
 
 def _invalid_argument(plugin_name: str, profile_id: str) -> str | None:
@@ -178,6 +187,63 @@ def _invalid_argument(plugin_name: str, profile_id: str) -> str | None:
             f"(max 64 characters, starting with a letter or digit); got {profile_id!r}"
         )
     return None
+
+
+def _open_registered(
+    directory: Path,
+    profile_id: str,
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> sqlite3.Connection:
+    """Open, initialize, and register, retrying transient startup lock errors.
+
+    A brand-new database is the worst case: several profiles can race the
+    initial ``journal_mode = WAL`` switch and the ``CREATE TABLE`` before a
+    connection carrying ``busy_timeout`` exists. The entire open/init/upsert
+    sequence is therefore retried under one budget. Any non-lock failure is
+    re-raised immediately so the caller can classify it.
+    """
+    database = directory / _DB_FILENAME
+    started = clock()
+    attempt = 0
+    while True:
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = open_db(database)
+            _register(connection, profile_id, clock())
+        except Exception as exc:  # noqa: BLE001 - classify, then retry or re-raise
+            _close_quietly(connection)
+            if not _is_busy_error(exc):
+                raise
+            remaining = _RETRY_BUDGET_S - (clock() - started)
+            if remaining <= 0.0:
+                raise
+            sleep(_retry_delay(attempt, remaining))
+            attempt += 1
+        else:
+            return connection
+
+
+def _close_quietly(connection: sqlite3.Connection | None) -> None:
+    """Close a connection without letting a close failure escape."""
+    if connection is not None:
+        with contextlib.suppress(Exception):
+            connection.close()
+
+
+def _is_busy_error(error: Exception) -> bool:
+    """Return ``True`` only for SQLite's transient lock/busy conditions."""
+    if not isinstance(error, sqlite3.OperationalError):
+        return False
+    text = str(error).lower()
+    return "locked" in text or "busy" in text
+
+
+def _retry_delay(attempt: int, remaining: float) -> float:
+    """Bounded exponential backoff plus jitter, never exceeding the budget."""
+    delay = min(_RETRY_BASE_S * (2.0**attempt), _RETRY_MAX_S)
+    delay *= 1.0 + random.random() * _RETRY_JITTER
+    return min(delay, remaining)
 
 
 def _register(connection: sqlite3.Connection, profile_id: str, now: float) -> None:
