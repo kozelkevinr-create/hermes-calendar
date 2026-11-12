@@ -18,6 +18,7 @@ from typing import Any
 from . import __version__
 from .hermes.tools import TOOL_SPECS, TOOLSET
 from .plugin_storage import global_dir, profile_dir
+from .shared_store_check import verify_shared
 
 PLUGIN_NAME = "hermes-calendar"
 PROFILE_DB_FILENAME = "calendar.db"
@@ -52,6 +53,7 @@ def calendar_status(_args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
     """
     profile = profile_dir(PLUGIN_NAME)
     global_ = global_dir(PLUGIN_NAME)
+    shared = verify_shared(PLUGIN_NAME, profile.parent.parent.name)
     payload: dict[str, Any] = {
         "plugin": PLUGIN_NAME,
         "version": __version__,
@@ -60,6 +62,13 @@ def calendar_status(_args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
         "databases": {
             "profile": _database_status(profile, PROFILE_DB_FILENAME),
             "global": _database_status(global_, GLOBAL_DB_FILENAME),
+        },
+        "shared_store": {
+            "ok": shared.ok,
+            "shared": shared.shared,
+            "peers_seen": list(shared.peers_seen),
+            "writable": shared.writable,
+            "detail": shared.detail,
         },
     }
     return json.dumps(payload, sort_keys=True)
