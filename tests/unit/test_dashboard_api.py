@@ -424,6 +424,170 @@ def test_event_listing_validation_and_not_found(client: TestClient) -> None:
     assert payload(unknown)["code"] == "not_found"
 
 
+def test_get_event_returns_the_same_shape_as_create(client: TestClient) -> None:
+    calendar_id = create_calendar(client)
+    created = create_event(client, calendar_id)
+
+    response = client.get(PREFIX + "/events/" + created["id"])
+
+    assert response.status_code == 200, response.text
+    body = payload(response)
+    assert body["ok"] is True
+    assert body["scope"] == "profile"
+    assert body["event"] == created
+    assert set(body) == {"ok", "scope", "event"}
+
+
+def test_get_event_uses_profile_and_global_scope(client: TestClient) -> None:
+    profile_calendar = create_calendar(client)
+    profile_event = create_event(client, profile_calendar)
+    global_event = create_event(client, "cal_global", summary="Team offsite", scope="global")
+
+    global_response = client.get(
+        PREFIX + "/events/" + global_event["id"], params={"scope": "global"}
+    )
+    assert global_response.status_code == 200, global_response.text
+    assert payload(global_response)["event"]["summary"] == "Team offsite"
+    assert payload(global_response)["event"]["scope"] == "global"
+
+    missing_elsewhere = client.get(PREFIX + "/events/" + global_event["id"])
+    assert missing_elsewhere.status_code == 404
+    assert payload(missing_elsewhere)["code"] == "not_found"
+
+    missing_global = client.get(
+        PREFIX + "/events/" + profile_event["id"], params={"scope": "global"}
+    )
+    assert missing_global.status_code == 404
+
+
+def test_get_event_returns_the_recurring_master(client: TestClient) -> None:
+    calendar_id = create_calendar(client)
+    created = create_event(
+        client,
+        calendar_id,
+        rrule="FREQ=WEEKLY;COUNT=3",
+        start="2026-03-02T09:00:00",
+        end="2026-03-02T10:00:00",
+    )
+
+    response = client.get(PREFIX + "/events/" + created["id"])
+
+    assert response.status_code == 200, response.text
+    event = payload(response)["event"]
+    assert event == created
+    assert event["rrule"] == "FREQ=WEEKLY;COUNT=3"
+    assert event["rev"] == 1
+    assert event["parent_id"] is None
+
+
+def test_get_event_returns_one_occurrence_with_master_revision(client: TestClient) -> None:
+    calendar_id = create_calendar(client)
+    master = create_event(
+        client,
+        calendar_id,
+        rrule="FREQ=WEEKLY;COUNT=3",
+        start="2026-03-02T09:00:00",
+        end="2026-03-02T10:00:00",
+    )
+    listed = list_events(client, calendar_id)
+    occurrence = listed["events"][1]
+
+    response = client.get(
+        PREFIX + "/events/" + master["id"],
+        params={"occurrence_start": occurrence["occurrence_start"]["local"]},
+    )
+
+    assert response.status_code == 200, response.text
+    returned = payload(response)["event"]
+    assert returned == occurrence
+    assert returned["master_id"] == master["id"]
+    assert returned["master_rev"] == master["rev"]
+    assert returned["recurrence_key"] == occurrence["recurrence_key"]
+    assert returned["is_override"] is False
+
+
+def test_get_event_returns_an_edited_occurrence_override(client: TestClient) -> None:
+    calendar_id = create_calendar(client)
+    master = create_event(
+        client,
+        calendar_id,
+        rrule="FREQ=DAILY;COUNT=3",
+        start="2026-03-02T09:00:00",
+        end="2026-03-02T10:00:00",
+    )
+    occurrence = list_events(client, calendar_id)["events"][1]
+    edited = client.patch(
+        PREFIX + "/events/" + master["id"],
+        json={
+            "expected_rev": master["rev"],
+            "occurrence_start": occurrence["occurrence_start"]["local"],
+            "series_scope": "this",
+            "summary": "One day only",
+        },
+    )
+    assert edited.status_code == 200, edited.text
+
+    response = client.get(
+        PREFIX + "/events/" + master["id"],
+        params={"occurrence_start": occurrence["occurrence_start"]["local"]},
+    )
+
+    assert response.status_code == 200, response.text
+    returned = payload(response)["event"]
+    assert returned["summary"] == "One day only"
+    assert returned["is_override"] is True
+    assert returned["override_event_id"] == payload(edited)["event"]["id"]
+    assert returned["master_rev"] == payload(edited)["event"]["rev"]
+
+
+def test_get_event_deleted_and_unknown_ids_are_not_found(client: TestClient) -> None:
+    calendar_id = create_calendar(client)
+    event = create_event(client, calendar_id)
+    deleted = client.delete(
+        PREFIX + "/events/" + event["id"],
+        params={"scope": "profile", "expected_rev": str(event["rev"])},
+    )
+    assert deleted.status_code == 200
+
+    tombstone = client.get(PREFIX + "/events/" + event["id"])
+    assert tombstone.status_code == 404
+    assert payload(tombstone)["code"] == "not_found"
+
+    unknown = client.get(PREFIX + "/events/missing-event")
+    assert unknown.status_code == 404
+    assert payload(unknown)["code"] == "not_found"
+
+
+def test_get_event_rejects_bad_id_scope_and_occurrence(client: TestClient) -> None:
+    calendar_id = create_calendar(client)
+    event = create_event(client, calendar_id)
+
+    too_long = client.get(PREFIX + "/events/" + "x" * (dashboard_api.MAX_ID_LENGTH + 1))
+    assert too_long.status_code == 400
+    assert payload(too_long)["code"] == "invalid_argument"
+
+    blank = client.get(PREFIX + "/events/%20")
+    assert blank.status_code == 400
+    assert payload(blank)["code"] == "invalid_argument"
+
+    bad_scope = client.get(PREFIX + "/events/" + event["id"], params={"scope": "everyone"})
+    assert bad_scope.status_code == 400
+    assert payload(bad_scope)["code"] == "invalid_argument"
+
+    long_occurrence = client.get(
+        PREFIX + "/events/" + event["id"],
+        params={"occurrence_start": "x" * (dashboard_api.MAX_TIME_LENGTH + 1)},
+    )
+    assert long_occurrence.status_code == 400
+
+    not_an_occurrence = client.get(
+        PREFIX + "/events/" + event["id"],
+        params={"occurrence_start": "2026-03-03T09:00:00"},
+    )
+    assert not_an_occurrence.status_code == 400
+    assert payload(not_an_occurrence)["code"] == "invalid_argument"
+
+
 # ---------------------------------------------------------------------- updates
 
 

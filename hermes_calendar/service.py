@@ -261,15 +261,42 @@ class CalendarService:
             event = repository.create_event(draft, actor=profile_name())
         return {"scope": resolved, "event": _event_payload(event)}
 
-    def get_event(self, *, scope: Any = DEFAULT_SCOPE, event_id: Any = None) -> dict[str, Any]:
-        """Return one non-deleted event by ID."""
+    def get_event(
+        self,
+        *,
+        scope: Any = DEFAULT_SCOPE,
+        event_id: Any = None,
+        occurrence_start: Any = None,
+    ) -> dict[str, Any]:
+        """Return one non-deleted event by ID, or one occurrence of its series.
+
+        ``occurrence_start`` selects a single instance by its original start and
+        returns the same occurrence shape as :meth:`list_events` (including
+        ``master_id``/``master_rev`` so a stale writer can re-read and retry).
+        Without it, the stored event row is returned unchanged.
+        """
         resolved = _scope(scope)
         target = _require_str(event_id, "event_id")
+        requested_occurrence = _optional_str(occurrence_start, "occurrence_start")
         with self._repository(resolved) as repository:
-            event = repository.get_event(target)
-        if event is None or event.deleted_utc is not None:
-            raise EventNotFoundError(target)
-        return {"scope": resolved, "event": _event_payload(event)}
+            event = _require_event(repository, target)
+            if requested_occurrence is None:
+                payload = _event_payload(event)
+            else:
+                master = _master_of(repository, event)
+                occurrence = _occurrence_for(repository, master, requested_occurrence)
+                overrides = [
+                    item
+                    for item in repository.list_overrides(master.id)
+                    if item.deleted_utc is None
+                ]
+                by_key = {
+                    str(item.recurrence_key): item
+                    for item in overrides
+                    if item.recurrence_key is not None
+                }
+                payload = _occurrence_payload(master, occurrence, by_key)
+        return {"scope": resolved, "event": payload}
 
     def update_event(
         self,
