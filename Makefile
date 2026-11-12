@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test coverage plugin-validate check clean
+.PHONY: install lint format typecheck test coverage plugin-validate validate-remote check clean
 
 PYTHON ?= python
 
@@ -30,6 +30,9 @@ plugin-validate:
 	else \
 		echo "offline manifest checks only; set HERMES_VALIDATE=1 to run the Hermes validator"; \
 	fi
+
+validate-remote:
+	./scripts/validate_remote.sh
 
 check: lint typecheck test plugin-validate
 

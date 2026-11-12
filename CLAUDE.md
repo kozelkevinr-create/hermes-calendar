@@ -99,16 +99,26 @@ make lint          # ruff check . + ruff format --check .
 make typecheck     # mypy --strict
 make test          # pytest + coverage (fail-under 90)
 make plugin-validate
+make validate-remote
 ```
 
 Run `make check` before requesting review. Set `HERMES_VALIDATE=1` (with Hermes on `PATH`)
 to add the real `hermes plugins validate .` gate; CI always runs the offline subset.
+`make validate-remote` is the one gate that needs a real Hermes install: it tars the
+worktree over ssh to `${HERMES_VALIDATE_HOST:-docker-host}`, runs
+`hermes plugins validate --json` there, prints the JSON, always deletes the temporary
+directory, and exits non-zero on `"ok": false`. Run it before reporting a plugin-loading
+change; never install the plugin into the host's `~/.hermes/plugins`.
 Do not weaken a gate to make a change pass
 (add `# noqa` / `# type: ignore` only with a reason on the same line).
 
 ### Testing expectations
 
 - Unit tests are fast, offline, deterministic, and do not require Hermes installed.
+- `tests/unit/test_hermes_style_load.py` loads a copy of the plugin directory the way
+  Hermes does (a package import with the repository root off `sys.path`) and checks the
+  registered tools against `plugin.yaml`; keep it passing when the entry point or the
+  package layout changes.
 - Integration tests are marked `@pytest.mark.integration` and opt-in.
 - Fake external systems at the boundary: a fake `hermes` executable for `hermes send`, a
   fake HTTP server for ntfy/Pushover/Web Push, an injected clock for scheduling.
@@ -145,7 +155,8 @@ Derived from `docs/research/hermes-plugin-api.md`:
    untrusted and must never reach a shell or template.
 9. **Validate before shipping.** `hermes plugins validate --json .` and
    `hermes plugins doctor --ci .` when Hermes is available; the offline
-   `scripts/check_manifest.py` runs in CI.
+   `scripts/check_manifest.py` runs in CI and `make validate-remote` runs the real
+   validator on `docker-host`.
 
 ## Code conventions
 
@@ -153,6 +164,10 @@ Derived from `docs/research/hermes-plugin-api.md`:
 - Full type annotations; `mypy --strict` is enforced.
 - `from __future__ import annotations` at the top of every module.
 - Public functions and modules get docstrings; explain invariants and failure modes.
+- Import inside `hermes_calendar/` only relatively. Hermes imports the plugin directory as
+  a package without adding it to `sys.path`; `tests/unit/test_relative_imports.py` enforces
+  this. The root `__init__.py` keeps the relative entry point and falls back to the
+  top-level package only when pytest imports it as a bare module.
 - Keep SQL in `hermes_calendar/db`; no other package writes SQL directly.
 - Keep Hermes-specific code in `hermes_calendar/hermes` behind narrow interfaces so the
   core is testable without Hermes.
