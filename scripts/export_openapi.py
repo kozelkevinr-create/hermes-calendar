@@ -20,11 +20,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
-
-from hermes_calendar.ui.dashboard_api import API_VERSION, router
-
+# Running a script puts ``scripts/`` on sys.path, not the repository root. Hermes
+# imports the plugin by path and the tests may run from a checkout without an
+# editable install, so add the repository root before importing the package.
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from fastapi import FastAPI  # noqa: E402 - path bootstrap above
+
+from hermes_calendar.ui.dashboard_api import API_VERSION, router  # noqa: E402 - path bootstrap above
+
 DEFAULT_OUTPUT = REPO_ROOT / "docs" / "api" / "openapi.json"
 PREFIX = "/api/plugins/hermes-calendar"
 
@@ -52,6 +58,61 @@ def render_openapi() -> str:
     return json.dumps(schema, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
+_HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
+
+
+def structural_form(schema: dict[str, Any]) -> dict[str, Any]:
+    """Reduce an OpenAPI document to the contract facts CI must guard.
+
+    FastAPI and Pydantic add or move schema details between releases (for
+    example the ``ValidationError.ctx``/``input`` properties), so byte equality
+    would fail without a route change. Paths, methods, parameter names and
+    locations, their required flags, and response status codes are the facts
+    this repository actually owns.
+    """
+    raw_paths = schema.get("paths")
+    paths: dict[str, Any] = raw_paths if isinstance(raw_paths, dict) else {}
+    normalized: dict[str, Any] = {}
+    for path, raw_methods in paths.items():
+        if not isinstance(raw_methods, dict):
+            continue
+        methods: dict[str, Any] = raw_methods
+        for method, operation in methods.items():
+            if method.lower() not in _HTTP_METHODS or not isinstance(operation, dict):
+                continue
+            parameters = [
+                {
+                    "name": parameter.get("name"),
+                    "in": parameter.get("in"),
+                    "required": bool(parameter.get("required", False)),
+                }
+                for parameter in operation.get("parameters", [])
+                if isinstance(parameter, dict)
+            ]
+            entry: dict[str, Any] = {
+                "parameters": sorted(
+                    parameters,
+                    key=lambda parameter: (
+                        str(parameter["in"]),
+                        str(parameter["name"]),
+                    ),
+                ),
+                "responses": sorted(str(status) for status in operation.get("responses", {})),
+            }
+            body = operation.get("requestBody")
+            if isinstance(body, dict):
+                entry["request_body_required"] = bool(body.get("required", False))
+            normalized[f"{method.upper()} {path}"] = entry
+    info = schema.get("info")
+    api_version = info.get("version") if isinstance(info, dict) else None
+    return {"api_version": api_version, "routes": normalized}
+
+
+def render_structural(schema: dict[str, Any]) -> str:
+    """Serialize :func:`structural_form` canonically for comparison."""
+    return json.dumps(structural_form(schema), indent=2, sort_keys=True) + "\n"
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -77,19 +138,28 @@ def main(argv: list[str] | None = None) -> int:
     destination = Path(str(args.output))
     if args.check:
         try:
-            existing = destination.read_text(encoding="utf-8")
+            existing_text = destination.read_text(encoding="utf-8")
         except FileNotFoundError:
             print(
                 f"stale: {destination} is missing; run scripts/export_openapi.py", file=sys.stderr
             )
             return 1
-        if existing != document:
+        try:
+            existing_schema: Any = json.loads(existing_text)
+            fresh_schema: Any = json.loads(document)
+        except json.JSONDecodeError as exc:
+            print(f"stale: {destination} is not valid JSON: {exc}", file=sys.stderr)
+            return 1
+        if not isinstance(existing_schema, dict) or not isinstance(fresh_schema, dict):
+            print(f"stale: {destination} is not an OpenAPI object", file=sys.stderr)
+            return 1
+        if render_structural(existing_schema) != render_structural(fresh_schema):
             print(
-                f"stale: {destination} differs; run scripts/export_openapi.py",
+                f"stale: {destination} routes/parameters differ; run scripts/export_openapi.py",
                 file=sys.stderr,
             )
             return 1
-        print(f"up to date: {destination}")
+        print(f"up to date: {destination} (structural form)")
         return 0
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(document, encoding="utf-8")
