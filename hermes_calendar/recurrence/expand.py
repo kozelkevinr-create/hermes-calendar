@@ -22,8 +22,8 @@ from zoneinfo import ZoneInfo
 
 from dateutil.rrule import rrulestr  # type: ignore[import-untyped]  # no py.typed marker
 
-from hermes_calendar.recurrence.rule import ParsedRule, parse_rule
-from hermes_calendar.recurrence.types import (
+from .rule import ParsedRule, parse_rule
+from .types import (
     MasterEvent,
     Occurrence,
     OverrideEvent,

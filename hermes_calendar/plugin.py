@@ -15,9 +15,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from hermes_calendar import __version__
-from hermes_calendar.hermes.tools import TOOL_SPECS, TOOLSET
-from hermes_calendar.plugin_storage import global_dir, profile_dir
+from . import __version__
+from .hermes.tools import TOOL_SPECS, TOOLSET
+from .plugin_storage import global_dir, profile_dir
 
 PLUGIN_NAME = "hermes-calendar"
 PROFILE_DB_FILENAME = "calendar.db"

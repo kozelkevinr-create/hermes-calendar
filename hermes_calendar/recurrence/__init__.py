@@ -12,9 +12,9 @@ rows into :class:`MasterEvent` / :class:`OverrideEvent` and receive
 
 from __future__ import annotations
 
-from hermes_calendar.recurrence.expand import ExpansionLimitExceeded, expand
-from hermes_calendar.recurrence.rule import UnsupportedRecurrence
-from hermes_calendar.recurrence.types import (
+from .expand import ExpansionLimitExceeded, expand
+from .rule import UnsupportedRecurrence
+from .types import (
     MasterEvent,
     Occurrence,
     OverrideEvent,

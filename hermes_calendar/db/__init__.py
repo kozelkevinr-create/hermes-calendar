@@ -11,8 +11,8 @@ supported write path.
 
 from __future__ import annotations
 
-from hermes_calendar.db.connection import connect
-from hermes_calendar.db.errors import (
+from .connection import connect
+from .errors import (
     CalendarNotFoundError,
     DatabaseError,
     EventNotFoundError,
@@ -23,9 +23,9 @@ from hermes_calendar.db.errors import (
     SourceNotFoundError,
     StoreScopeError,
 )
-from hermes_calendar.db.migrations import SCHEMA_VERSION, migrate
-from hermes_calendar.db.repository import Origin, Repository
-from hermes_calendar.db.store import (
+from .migrations import SCHEMA_VERSION, migrate
+from .repository import Origin, Repository
+from .store import (
     GLOBAL_DB_FILENAME,
     PROFILE_DB_FILENAME,
     open_global_store,

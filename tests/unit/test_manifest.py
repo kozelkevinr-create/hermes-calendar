@@ -36,7 +36,7 @@ def test_manifest_version_matches_package() -> None:
 def test_entry_point_sits_beside_manifest() -> None:
     entry = REPO_ROOT / "__init__.py"
     assert entry.is_file()
-    assert "from hermes_calendar.plugin import register" in entry.read_text(encoding="utf-8")
+    assert "from .hermes_calendar.plugin import register" in entry.read_text(encoding="utf-8")
 
 
 def test_register_is_callable() -> None:

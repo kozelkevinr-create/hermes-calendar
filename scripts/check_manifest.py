@@ -17,7 +17,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FIELDS = ("name", "version", "description")
-ENTRY_POINT = "from hermes_calendar.plugin import register"
+ENTRY_POINT = "from .hermes_calendar.plugin import register"
 
 
 def fail(message: str) -> None:

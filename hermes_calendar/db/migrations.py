@@ -16,8 +16,8 @@ import sqlite3
 import time
 from typing import Literal
 
-from hermes_calendar.db.errors import SchemaVersionError, StoreScopeError
-from hermes_calendar.db.schema import V1_STATEMENTS
+from .errors import SchemaVersionError, StoreScopeError
+from .schema import V1_STATEMENTS
 
 StoreScope = Literal["profile", "global"]
 
