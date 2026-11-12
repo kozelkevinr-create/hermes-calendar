@@ -47,3 +47,7 @@ def test_declared_surfaces_are_lists() -> None:
     manifest = load_manifest()
     assert isinstance(manifest.get("provides_tools"), list)
     assert isinstance(manifest.get("provides_hooks"), list)
+
+
+def test_calendar_status_is_declared() -> None:
+    assert "calendar_status" in load_manifest()["provides_tools"]

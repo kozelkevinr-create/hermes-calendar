@@ -107,6 +107,7 @@ Plugin state belongs in the Hermes profile's plugin data directory (`plugin_data
 ├── __init__.py                 # Hermes entry point -> hermes_calendar.plugin.register
 ├── hermes_calendar/            # implementation package
 │   ├── cli.py                  # `hermes-calendar` entry point
+│   ├── plugin_storage.py       # generic per-profile/global data dirs + SQLite open helper
 │   ├── db/                     # SQLite connection + schema + repositories
 │   ├── models/                 # canonical event model
 │   ├── recurrence/             # RRULE expansion
