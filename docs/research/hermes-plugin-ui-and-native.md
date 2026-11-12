@@ -79,7 +79,7 @@ hermes config get dashboard
 hermes plugins show kanban            # not installed as a user plugin
 hermes plugins install --help
 hermes plugins validate --help
-curl -s http://192.168.0.127:9119/api/status
+curl -s http://<dashboard-host>:9119/api/status
 python3 -V; command -v cargo rustc cc gcc clang maturin uv
 grep -o '^HERMES_DASHBOARD[A-Z_]*' ~/.hermes/.env ~/.hermes/dashboard-auth.env
 systemctl cat hermes-dashboard
@@ -362,29 +362,12 @@ curl -s http://HOST:9119/api/status | jq '.auth_required, .auth_providers'
 # ["basic"]
 ```
 
-### 8.4 This host, as configured today
+### 8.4 Example deployment
 
-- Unit: `/etc/systemd/system/hermes-dashboard.service` runs
-  `hermes dashboard --host 192.168.0.127 --port 9119 --no-open`, `Restart=always`,
-  `RestartPreventExitStatus=78`. Drop-in `10-files-root.conf` sets
-  `HERMES_DASHBOARD_FILES_ROOT=/home/spaulding`.
-- Drop-in `15-auth-secret.conf` pulls in `~/.hermes/dashboard-auth.env` (mode 600). That
-  file contains **one** variable, `HERMES_DASHBOARD_BASIC_AUTH_SECRET`.
-- Live check: `auth_required: true`, `auth_providers: ["basic"]`, version `0.23.0`.
-- `hermes config get dashboard` reports `basic_auth.username: ''` and an empty
-  `password_hash`/`password`. The provider only registers when a username and a password
-  are present (`plugins/dashboard_auth/basic/__init__.py::_settings` raises
-  `SkipRegistration` otherwise), so either the credential lives somewhere this read did
-  not see (profile/overlay) or the running process predates a config change. **Open item:
-  confirm the actual login credential before relying on remote access.**
-- `~/handbook/hermes-operations.md` documents the operational contract: restart only via
-  `sudo systemctl restart hermes-dashboard.service`, never hand-start it (a hand-started
-  instance grabs 9119 and the unit then exits 75/TEMPFAIL every 10 s), and keep the
-  signing key in `dashboard-auth.env`.
+A typical self-hosted deployment runs `hermes dashboard --host <lan-address> --port 9119 --no-open`
+under a service manager, with the sign-in secret kept in a mode-600 environment file outside the
+plugin tree. Host-specific unit files and addresses are intentionally omitted from this document.
 
-For the calendar UI this means: put `dashboard/` in the plugin, enable the plugin, and the
-tab appears for anyone already authorized on that dashboard. No port, no separate service,
-no extra firewall rule.
 
 ## 9. UI gotchas worth designing around
 
@@ -690,11 +673,9 @@ Given "published" + "UI on the host" + "part in Rust":
 
 ## 19. Open questions
 
-- **Dashboard credential on this host.** The service binds `192.168.0.127:9119` and
-  `/api/status` advertises the `basic` provider, but `hermes config get dashboard` shows no
-  `basic_auth.username` / password, and `~/.hermes/dashboard-auth.env` holds only the
-  signing secret. Confirm where the login credential actually lives before depending on
-  remote access; a restart could re-evaluate it and fail closed.
+- **Dashboard credential.** Confirm where the dashboard login credential lives on the target
+  deployment before depending on remote access; a restart can re-evaluate it and fail closed.
+
 - **Publishing tier.** Catalog admission requires a public repo, a 40-hex pin and reviewer
   sign-off per update (`catalog-submission.md`). Decide whether the calendar plugin targets
   the catalog or "install from Git" only; the latter skips review but users get a
