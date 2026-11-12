@@ -28,6 +28,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  # Dashboard tests only. The dashboard host provides FastAPI/httpx at runtime;
+  # the plugin itself must keep working when neither is installed.
+  "fastapi>=0.115",
+  "httpx>=0.27",
   "mypy>=1.10",
   "pre-commit>=3.7",
   "pytest>=8.2",

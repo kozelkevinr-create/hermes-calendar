@@ -62,6 +62,52 @@ def _json(payload: Mapping[str, Any]) -> str:
     return json.dumps(dict(payload), sort_keys=True, ensure_ascii=False)
 
 
+def error_payload(exc: BaseException, *, expose_details: bool = True) -> dict[str, Any]:
+    """Map an exception onto the plugin's structured error envelope.
+
+    The tools keep the historic behaviour of including store and unexpected
+    exception text. Callers that face an untrusted client (the dashboard API)
+    pass ``expose_details=False`` so a raw exception is never echoed back.
+    """
+    if isinstance(exc, ServiceError):
+        return {"ok": False, "error": str(exc), "code": exc.code}
+    if isinstance(exc, RevisionConflict):
+        return {
+            "ok": False,
+            "error": str(exc),
+            "code": "revision_conflict",
+            "event_id": exc.event_id,
+            "expected_rev": exc.expected_rev,
+        }
+    if isinstance(exc, NotFoundError):
+        return {
+            "ok": False,
+            "error": str(exc),
+            "code": "not_found",
+            "error_type": type(exc).__name__,
+        }
+    if isinstance(exc, sqlite3.IntegrityError):
+        detail = f": {exc}" if expose_details else ""
+        return {
+            "ok": False,
+            "error": f"database constraint rejected the change{detail}",
+            "code": "conflict",
+        }
+    if isinstance(exc, DatabaseError):
+        return {
+            "ok": False,
+            "error": str(exc) if expose_details else "the calendar store is unavailable",
+            "code": "store_error",
+        }
+    if expose_details:
+        return {
+            "ok": False,
+            "error": f"unexpected error: {type(exc).__name__}: {exc}",
+            "code": "internal_error",
+        }
+    return {"ok": False, "error": "internal error", "code": "internal_error"}
+
+
 def _tool(handler: ToolHandler) -> Callable[..., str]:
     """Wrap a handler so it always returns JSON and never raises to Hermes."""
 
@@ -77,45 +123,8 @@ def _tool(handler: ToolHandler) -> Callable[..., str]:
             payload = handler(values)
             payload.setdefault("ok", True)
             return _json(payload)
-        except ServiceError as exc:
-            return _json({"ok": False, "error": str(exc), "code": exc.code})
-        except RevisionConflict as exc:
-            return _json(
-                {
-                    "ok": False,
-                    "error": str(exc),
-                    "code": "revision_conflict",
-                    "event_id": exc.event_id,
-                    "expected_rev": exc.expected_rev,
-                }
-            )
-        except NotFoundError as exc:
-            return _json(
-                {
-                    "ok": False,
-                    "error": str(exc),
-                    "code": "not_found",
-                    "error_type": type(exc).__name__,
-                }
-            )
-        except sqlite3.IntegrityError as exc:
-            return _json(
-                {
-                    "ok": False,
-                    "error": f"database constraint rejected the change: {exc}",
-                    "code": "conflict",
-                }
-            )
-        except DatabaseError as exc:
-            return _json({"ok": False, "error": str(exc), "code": "store_error"})
         except Exception as exc:  # noqa: BLE001 - the plugin contract forbids raising into Hermes
-            return _json(
-                {
-                    "ok": False,
-                    "error": f"unexpected error: {type(exc).__name__}: {exc}",
-                    "code": "internal_error",
-                }
-            )
+            return _json(error_payload(exc))
 
     return wrapped
 
@@ -542,6 +551,7 @@ TOOL_SPECS: tuple[tuple[str, dict[str, Any], Callable[..., str], str], ...] = (
 
 __all__ = [
     "TOOL_SPECS",
+    "error_payload",
     "calendar_create_calendar",
     "calendar_create_event",
     "calendar_delete_event",

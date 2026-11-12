@@ -7,6 +7,11 @@ dist/
 .venv/
 venv/
 
+# The Hermes dashboard plugin ships hand-written JS/CSS under dashboard/dist/.
+# It is source, not build output, so the generic dist/ rule must not swallow it.
+!dashboard/dist/
+!dashboard/dist/**
+
 # Tooling caches
 .pytest_cache/
 .mypy_cache/

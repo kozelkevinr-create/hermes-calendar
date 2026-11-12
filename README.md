@@ -30,7 +30,7 @@ a second account or a second notification stack. The design goals are:
 | Recurrence | `hermes_calendar/recurrence` | RFC 5545 expansion, DST, overrides |
 | Reminders | `hermes_calendar/reminders` | Claim/lease engine, routing, delivery adapters |
 | Sync | `hermes_calendar/sync` | Remote adapters and conflict handling |
-| Web UI | `hermes_calendar/ui` | Local web UI / PWA |
+| Dashboard UI | `dashboard/` + `hermes_calendar/ui` | Hermes web-dashboard tab, service-backed FastAPI routes |
 | Hermes adapters | `hermes_calendar/hermes` | `ctx` surfaces, profiles, `hermes send`, cron |
 | CLI | `hermes_calendar/cli.py` | `hermes-calendar` entry point and diagnostics |
 
@@ -99,12 +99,54 @@ production installs to a 40-character commit SHA with `--ref`.
 Plugin state belongs in the Hermes profile's plugin data directory (`plugin_data_dir()` /
 `plugin_db()`), never in the install directory: `hermes plugins update` replaces it.
 
+### Opening the calendar page
+
+The calendar tab is a web-dashboard plugin in the same install. It appears at
+`/calendar` inside the existing dashboard, behind the existing login; there is no second
+port, service, or password.
+
+1. Install and enable the plugin in one step, or enable it after installing:
+
+   ```sh
+   hermes plugins install <owner>/hermes-calendar --enable
+   # or, for an already-installed plugin:
+   hermes plugins enable hermes-calendar
+   hermes plugins list          # hermes-calendar should show as enabled
+   ```
+
+2. If the dashboard is already running, force a discovery rescan instead of restarting it:
+
+   ```sh
+   curl http://127.0.0.1:9119/api/dashboard/plugins/rescan
+   ```
+
+   If no rescan is possible, let the operator restart the dashboard through their normal
+   service manager. Do not hand-start a second `hermes dashboard`; it competes for the port.
+
+3. Open the dashboard, sign in, and choose **Calendar** in the navigation. The page shows a
+   month view and an agenda list. Use the **Profile** / **Shared (global)** switch to choose
+   a private profile store or the shared global calendar. New events default to the
+   browser's timezone, which is displayed above the form.
+
+The backend routes live at `/api/plugins/hermes-calendar/` and are mounted only while the
+plugin is enabled. The JS/CSS bundle is hand-written (no build step) and the dashboard
+provides FastAPI/httpx at runtime, so the plugin itself has no additional runtime
+dependency. The notification panel is intentionally left as an empty, labelled slot; the
+reminder engine that fills it is a separate task.
+
+Dashboard route tests use `FastAPI`'s `TestClient`; `fastapi` and `httpx` are **development
+dependencies only** and are not declared as plugin runtime dependencies.
+
 ## Repository layout
 
 ```text
 .
 ├── plugin.yaml                 # Hermes manifest (name, version, surfaces)
 ├── __init__.py                 # Hermes entry point -> hermes_calendar.plugin.register
+├── dashboard/                  # Hermes web-dashboard plugin (no build step)
+│   ├── manifest.json           # tab, entry, CSS, api
+│   ├── dist/                   # hand-written index.js + style.css
+│   └── plugin_api.py           # thin bridge -> hermes_calendar.ui.dashboard_api
 ├── hermes_calendar/            # implementation package
 │   ├── cli.py                  # `hermes-calendar` entry point
 │   ├── plugin_storage.py       # generic per-profile/global data dirs + SQLite open helper
