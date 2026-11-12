@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
+from ..db import DatabaseError, open_global_store, open_profile_store
 from ..db.reminders import DeliveryRecord, ReminderInstance, ReminderStore
 from .render import sanitize
 
@@ -25,7 +28,42 @@ VISIBLE_STATES: tuple[str, ...] = (
     "failed",
     "dead_letter",
 )
-SNOOZE_MINUTES = frozenset({5, 10, 60})
+SNOOZE_MINUTES = frozenset({5, 15, 60, 1440})
+
+
+@contextmanager
+def notification_stores() -> Iterator[tuple[sqlite3.Connection, sqlite3.Connection | None]]:
+    """Open the profile store and, best-effort, the shared global store.
+
+    A broken or unreadable global store must not hide profile-local
+    notifications; callers receive ``None`` and can still list and mutate the
+    profile rows.
+    """
+    profile_connection = open_profile_store()
+    global_connection: sqlite3.Connection | None = None
+    try:
+        try:
+            global_connection = open_global_store()
+        except (DatabaseError, sqlite3.Error, OSError):
+            global_connection = None
+        yield profile_connection, global_connection
+    finally:
+        if global_connection is not None:
+            global_connection.close()
+        profile_connection.close()
+
+
+def _states_for(*, include_dismissed: bool, state: str | None) -> tuple[str, ...] | None:
+    """Resolve the state filter shared by list and count operations."""
+    if state is not None:
+        if state not in VISIBLE_STATES:
+            raise ValueError(
+                "state must be one of " + ", ".join(repr(item) for item in VISIBLE_STATES)
+            )
+        return (state,)
+    if include_dismissed:
+        return None
+    return VISIBLE_STATES
 
 
 def _rfc3339(epoch: int) -> str:
@@ -94,19 +132,58 @@ def list_notifications(
     global_connection: sqlite3.Connection | None = None,
     include_dismissed: bool = False,
     limit: int = 20,
+    offset: int = 0,
     state: str | None = None,
 ) -> list[dict[str, object]]:
-    """Return notification payloads newest-first."""
+    """Return one page of notification payloads newest-first."""
     profile_store = ReminderStore(profile_connection)
     global_store = None if global_connection is None else ReminderStore(global_connection)
-    if state is not None:
-        states: tuple[str, ...] | None = (state,)
-    elif include_dismissed:
-        states = None
-    else:
-        states = VISIBLE_STATES
-    instances = profile_store.list_instances(states=states, limit=limit)
+    states = _states_for(include_dismissed=include_dismissed, state=state)
+    instances = profile_store.list_instances(states=states, limit=limit, offset=offset)
     return [notification_payload(instance, profile_store, global_store) for instance in instances]
+
+
+def count_notifications(
+    profile_connection: sqlite3.Connection,
+    *,
+    include_dismissed: bool = False,
+    state: str | None = None,
+) -> int:
+    """Count the notification rows the same filters would page through."""
+    states = _states_for(include_dismissed=include_dismissed, state=state)
+    return ReminderStore(profile_connection).count_instances(states=states)
+
+
+def notification_page(
+    profile_connection: sqlite3.Connection,
+    *,
+    global_connection: sqlite3.Connection | None = None,
+    include_dismissed: bool = False,
+    limit: int = 20,
+    offset: int = 0,
+    state: str | None = None,
+) -> dict[str, object]:
+    """Return a paginated notification page with its unpaged total."""
+    notifications = list_notifications(
+        profile_connection,
+        global_connection=global_connection,
+        include_dismissed=include_dismissed,
+        limit=limit,
+        offset=offset,
+        state=state,
+    )
+    total = count_notifications(
+        profile_connection,
+        include_dismissed=include_dismissed,
+        state=state,
+    )
+    return {
+        "count": len(notifications),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "notifications": notifications,
+    }
 
 
 def snooze_notification(
@@ -117,9 +194,10 @@ def snooze_notification(
     global_connection: sqlite3.Connection | None = None,
     now: int | None = None,
 ) -> dict[str, object]:
-    """Snooze a notification for 5, 10, or 60 minutes."""
+    """Snooze a notification for one of the allowlisted durations."""
     if minutes not in SNOOZE_MINUTES:
-        raise ValueError("minutes must be one of 5, 10, 60")
+        allowed = ", ".join(str(item) for item in sorted(SNOOZE_MINUTES))
+        raise ValueError(f"minutes must be one of {allowed}")
     timestamp = int(time.time()) if now is None else int(now)
     store = ReminderStore(profile_connection)
     store.snooze(notification_id, until_utc=timestamp + minutes * 60, now=timestamp)

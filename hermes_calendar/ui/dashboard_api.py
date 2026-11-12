@@ -30,6 +30,8 @@ from fastapi.responses import JSONResponse
 from ..hermes.tools import error_payload
 from ..ics import MAX_ICS_BYTES
 from ..plugin import calendar_status
+from ..reminders import service as reminder_service
+from ..reminders.doctor import reminder_status
 from ..service import DEFAULT_SCOPE, MAX_TEXT, CalendarService, InvalidArgument, Scope, ServiceError
 
 __all__ = ["router"]
@@ -54,6 +56,10 @@ MAX_COLOR_LENGTH = 32
 MAX_SUMMARY_LENGTH = 500
 MAX_LOCATION_LENGTH = 2_000
 MAX_URL_LENGTH = 2_048
+MAX_NOTIFICATION_ID_LENGTH = 128
+MAX_NOTIFICATION_LIMIT = 100
+MAX_NOTIFICATION_OFFSET = 10_000
+DEFAULT_NOTIFICATION_LIMIT = 20
 
 _SCOPES = ("profile", "global")
 _PATCHABLE_INPUTS = (
@@ -98,6 +104,7 @@ _UPDATE_EVENT_FIELDS = frozenset(
     }
 )
 _IMPORT_FIELDS = frozenset({"text", "calendar_id", "scope"})
+_SNOOZE_FIELDS = frozenset({"minutes"})
 
 _HTTP_STATUS: dict[str, int] = {
     "invalid_argument": 400,
@@ -204,6 +211,37 @@ def _query(value: str | None, name: str, *, max_length: int, required: bool = Fa
     if required and not value.strip():
         raise InvalidArgument(f"{name} is required and must be a non-empty string")
     return value
+
+
+def _query_int(
+    value: str | None,
+    name: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    """Parse an optional bounded integer query parameter."""
+    if value is None:
+        return default
+    if len(value) > 16 or not value.isdigit():
+        raise InvalidArgument(f"{name} must be an integer")
+    parsed = int(value)
+    if parsed < minimum or parsed > maximum:
+        raise InvalidArgument(f"{name} must be between {minimum} and {maximum}")
+    return parsed
+
+
+def _query_bool(value: str | None, name: str, *, default: bool) -> bool:
+    """Parse ``true``/``false``-style query values without Python's permissive bool()."""
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise InvalidArgument(f"{name} must be true or false")
 
 
 def _required_query_int(value: str | None, name: str, *, minimum: int) -> int:
@@ -331,12 +369,13 @@ def _ics_text(body: dict[str, Any]) -> str:
     return text
 
 
-def _path_id(value: str) -> str:
-    """Validate an event identifier taken from the URL path."""
+def _path_id(value: str, *, name: str = "event_id") -> str:
+    """Validate a row identifier taken from the URL path."""
     if not value.strip():
-        raise InvalidArgument("event_id is required")
-    if len(value) > MAX_ID_LENGTH:
-        raise InvalidArgument(f"event_id must be at most {MAX_ID_LENGTH} characters")
+        raise InvalidArgument(f"{name} is required")
+    limit = MAX_NOTIFICATION_ID_LENGTH if name == "notification_id" else MAX_ID_LENGTH
+    if len(value) > limit:
+        raise InvalidArgument(f"{name} must be at most {limit} characters")
     return value
 
 
@@ -499,6 +538,102 @@ async def export_ics(
             end=_query(end, "end", max_length=MAX_TIME_LENGTH, required=True),
             timezone=_query(timezone, "timezone", max_length=MAX_TIMEZONE_LENGTH),
         )
+
+    return await _run(operation)
+
+
+@router.get("/notifications")
+async def list_notifications(
+    limit: str | None = None,
+    offset: str | None = None,
+    include_dismissed: str | None = None,
+    state: str | None = None,
+) -> JSONResponse:
+    """List one bounded page of profile notifications, newest first."""
+
+    def operation() -> dict[str, Any]:
+        page_limit = _query_int(
+            limit,
+            "limit",
+            default=DEFAULT_NOTIFICATION_LIMIT,
+            minimum=1,
+            maximum=MAX_NOTIFICATION_LIMIT,
+        )
+        page_offset = _query_int(
+            offset,
+            "offset",
+            default=0,
+            minimum=0,
+            maximum=MAX_NOTIFICATION_OFFSET,
+        )
+        include = _query_bool(include_dismissed, "include_dismissed", default=False)
+        state_value = _query(state, "state", max_length=32)
+        if state_value is not None and state_value not in reminder_service.VISIBLE_STATES:
+            raise InvalidArgument(
+                "state must be one of "
+                + ", ".join(repr(item) for item in reminder_service.VISIBLE_STATES)
+            )
+        with reminder_service.notification_stores() as (profile_connection, global_connection):
+            return reminder_service.notification_page(
+                profile_connection,
+                global_connection=global_connection,
+                include_dismissed=include,
+                limit=page_limit,
+                offset=page_offset,
+                state=state_value,
+            )
+
+    return await _run(operation)
+
+
+@router.post("/notifications/{notification_id}/dismiss")
+async def dismiss_notification(notification_id: str) -> JSONResponse:
+    """Dismiss (acknowledge) one notification; repeated dismisses are no-ops."""
+
+    def operation() -> dict[str, Any]:
+        with reminder_service.notification_stores() as (profile_connection, global_connection):
+            return {
+                "notification": reminder_service.dismiss_notification(
+                    profile_connection,
+                    notification_id=_path_id(notification_id, name="notification_id"),
+                    global_connection=global_connection,
+                )
+            }
+
+    return await _run(operation)
+
+
+@router.post("/notifications/{notification_id}/snooze")
+async def snooze_notification(notification_id: str, request: Request) -> JSONResponse:
+    """Snooze one notification for an allowlisted number of minutes."""
+
+    def operation(body: dict[str, Any]) -> dict[str, Any]:
+        minutes = _required_int_field(body, "minutes", minimum=1)
+        if minutes not in reminder_service.SNOOZE_MINUTES:
+            allowed = ", ".join(str(item) for item in sorted(reminder_service.SNOOZE_MINUTES))
+            raise InvalidArgument(f"minutes must be one of {allowed}")
+        with reminder_service.notification_stores() as (profile_connection, global_connection):
+            return {
+                "notification": reminder_service.snooze_notification(
+                    profile_connection,
+                    notification_id=_path_id(notification_id, name="notification_id"),
+                    minutes=minutes,
+                    global_connection=global_connection,
+                )
+            }
+
+    return await _body_request(
+        request, limit=MAX_JSON_BYTES, allowed=_SNOOZE_FIELDS, operation=operation
+    )
+
+
+@router.get("/reminders/status")
+async def reminders_status() -> JSONResponse:
+    """Return reminder setup diagnostics without revealing the delivery target."""
+
+    def operation() -> dict[str, Any]:
+        with reminder_service.notification_stores() as (profile_connection, global_connection):
+            return reminder_status(profile_connection, global_connection=global_connection)
 
     return await _run(operation)
 

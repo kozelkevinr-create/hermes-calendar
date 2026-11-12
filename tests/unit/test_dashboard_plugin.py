@@ -71,10 +71,15 @@ def test_bundle_uses_the_plugin_sdk_and_never_builds_dom_from_event_text() -> No
     present = [token for token in FORBIDDEN_JS if token in source]
     assert not present, f"bundle uses forbidden DOM/JS escape hatch(es): {present}"
 
-    # The notification panel belongs to the reminders task; this bundle must
-    # leave a visibly labelled empty slot rather than fetch reminder data.
-    assert "Notification panel placeholder" in source
-    assert "/notifications" not in source
+    # Notification centre and reminder setup are part of this page. Reminder
+    # text is rendered as a React child (text), never as markup.
+    assert "/notifications" in source
+    assert "/reminders/status" in source
+    assert "Reminder setup" in source
+    assert "Copy cron command" in source
+    assert "Dismiss" in source
+    assert "Snooze" in source
+    assert "hc-badge" in source
 
     # Required controls and labels, checked as data because there is no JS test
     # runner in this project.

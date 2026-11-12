@@ -120,7 +120,7 @@ The hard parts are not the API calls:
 | R4 | Correct across DST, timezone changes, and travel | UTC instants; event/user timezone for display |
 | R5 | Delivered when the dashboard and browser are closed, and when the host slept through the fire time | Cron trigger + catch-up + stale suppression |
 | R6 | Quiet hours; critical reminders may override | Per-user, per-calendar |
-| R7 | Snooze (5/10/60 min) and dismiss | In the dashboard for v1 |
+| R7 | Snooze (5/15/60/1440 min) and dismiss | In the dashboard for v1 |
 | R8 | No duplicate user-visible notification from retries, two tickers, or two profiles | Per-profile lease + global lease |
 | R9 | Delivery attempts and failures are visible and testable | Dashboard tab + `hermes calendar doctor` |
 | R10 | Minimal content by default; full detail opt-in | Redaction and link policy |
@@ -1031,7 +1031,7 @@ Rules:
 
 **MVP (dashboard only):**
 
-- Snooze 5/10/60 min, dismiss, open event.
+- Snooze 5/15/60/1440 min, dismiss, open event.
 - External messages say "Open the calendar to snooze"; no fake affordance.
 - Critical reminders unacknowledged after `escalate_after` (default 5 min)
   are logged for the dashboard; escalation to a second channel is post-MVP.
@@ -1040,7 +1040,7 @@ Rules:
 
 - Send with `--json`, store the platform message id if returned.
 - A gateway hook matches a DM reply to a recent reminder; commands:
-  `snooze 10`, `done`, `mute 1h`.
+  `snooze 15`, `done`, `mute 1h`.
 - Requires message-id correlation or an explicit per-reminder token, a
   sender-ID allowlist, DM-only routing, and strict parsing (no free-form LLM
   in the delivery path).
@@ -1143,7 +1143,7 @@ on a broken essential channel, and is the diagnostic for bug reports.
 | API | Auth gate 401; `SDK.fetchJSON` same-origin; no secret in bundle; async handlers don't block; 60 s timeout behavior; manifest name matches registry key |
 | Adapters | Fake `hermes` executable (exit 0/1/2, timeout, malformed JSON); fake HTTP for post-MVP ntfy/Pushover; `notify-send` absent |
 | Integration | Real `hermes send --to` against a local test target (opt-in, CI-skipped); dashboard tab loads in a headless browser and registers within 2 s |
-| E2E | Event 2 min out → fires once → snooze 10 → fires again; dashboard closed → cron delivers; kill holder → takeover without duplicate |
+| E2E | Event 2 min out → fires once → snooze 15 → fires again; dashboard closed → cron delivers; kill holder → takeover without duplicate |
 | Content | Snapshot per platform: no `@everyone`, no localhost link, truncation keeps time + title, unicode/emoji, RTL |
 
 **Concurrency and profile tests are mandatory.** Duplicate reminders are the

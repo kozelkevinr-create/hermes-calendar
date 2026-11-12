@@ -39,6 +39,25 @@
     { value: "monthly", label: "Monthly" },
     { value: "yearly", label: "Yearly" }
   ];
+  var SNOOZE_CHOICES = [
+    { minutes: 5, label: "5 min" },
+    { minutes: 15, label: "15 min" },
+    { minutes: 60, label: "1 hour" },
+    { minutes: 1440, label: "1 day" }
+  ];
+  var NOTIFICATION_PAGE_SIZE = 20;
+  var NOTIFICATION_STATE_LABELS = {
+    scheduled: "Scheduled",
+    firing: "Firing",
+    retrying: "Retrying",
+    delivered: "Delivered",
+    snoozed: "Snoozed",
+    suppressed: "Suppressed",
+    failed: "Failed",
+    dead_letter: "Dead letter",
+    acknowledged: "Dismissed",
+    cancelled: "Cancelled"
+  };
   var COMMON_ZONES = [
     "UTC",
     "America/New_York",
@@ -120,6 +139,28 @@
     } catch (error) {
       return key;
     }
+  }
+
+  function formatInstant(value) {
+    if (!value) {
+      return "";
+    }
+    var date = new Date(value);
+    if (isNaN(date.getTime())) {
+      return String(value);
+    }
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short"
+      }).format(date);
+    } catch (error) {
+      return String(value);
+    }
+  }
+
+  function notificationStateLabel(state) {
+    return NOTIFICATION_STATE_LABELS[state] || String(state || "Unknown");
   }
 
   function formatEventAria(ev) {
@@ -460,6 +501,16 @@
     var [calendarDraft, setCalendarDraft] = useState({ name: "", color: "", scope: "profile" });
     var [refreshCalendars, setRefreshCalendars] = useState(0);
     var [refreshEvents, setRefreshEvents] = useState(0);
+    var [section, setSection] = useState("calendar");
+    var [notifications, setNotifications] = useState(EMPTY_LIST);
+    var [notificationTotal, setNotificationTotal] = useState(0);
+    var [notificationOffset, setNotificationOffset] = useState(0);
+    var [notificationsLoading, setNotificationsLoading] = useState(false);
+    var [refreshNotifications, setRefreshNotifications] = useState(0);
+    var [notificationBusy, setNotificationBusy] = useState("");
+    var [reminderStatus, setReminderStatus] = useState(null);
+    var [reminderStatusLoading, setReminderStatusLoading] = useState(false);
+    var [refreshReminderStatus, setRefreshReminderStatus] = useState(0);
     var titleRef = useRef(null);
     var fileRef = useRef(null);
 
@@ -595,6 +646,71 @@
         };
       },
       [scope, calendarId, timezone, range, refreshEvents]
+    );
+
+    useEffect(
+      function () {
+        var cancelled = false;
+        var params = new URLSearchParams();
+        params.set("limit", String(NOTIFICATION_PAGE_SIZE));
+        params.set("offset", String(notificationOffset));
+        setNotificationsLoading(true);
+        api("/notifications?" + params.toString())
+          .then(function (payload) {
+            if (cancelled) {
+              return;
+            }
+            setNotifications(payload.notifications || EMPTY_LIST);
+            setNotificationTotal(typeof payload.total === "number" ? payload.total : 0);
+          })
+          .catch(function (error) {
+            if (!cancelled) {
+              setNotifications(EMPTY_LIST);
+              setNotificationTotal(0);
+              setStatus({ kind: "error", message: errorText(error) });
+            }
+          })
+          .then(function () {
+            if (!cancelled) {
+              setNotificationsLoading(false);
+            }
+          });
+        return function () {
+          cancelled = true;
+        };
+      },
+      [notificationOffset, refreshNotifications]
+    );
+
+    useEffect(
+      function () {
+        if (section !== "notifications") {
+          return undefined;
+        }
+        var cancelled = false;
+        setReminderStatusLoading(true);
+        api("/reminders/status")
+          .then(function (payload) {
+            if (!cancelled) {
+              setReminderStatus(payload);
+            }
+          })
+          .catch(function (error) {
+            if (!cancelled) {
+              setReminderStatus(null);
+              setStatus({ kind: "error", message: errorText(error) });
+            }
+          })
+          .then(function () {
+            if (!cancelled) {
+              setReminderStatusLoading(false);
+            }
+          });
+        return function () {
+          cancelled = true;
+        };
+      },
+      [section, refreshReminderStatus]
     );
 
     useEffect(
@@ -873,6 +989,88 @@
         .then(function () {
           setBusy(false);
         });
+    }
+
+    function refreshNotificationList() {
+      setRefreshNotifications(function (value) {
+        return value + 1;
+      });
+    }
+
+    function dismissNotification(notificationId) {
+      if (notificationBusy) {
+        return;
+      }
+      setNotificationBusy(notificationId);
+      api("/notifications/" + encodeURIComponent(notificationId) + "/dismiss", {
+        method: "POST"
+      })
+        .then(function () {
+          refreshNotificationList();
+          notice("ok", "Notification dismissed.");
+        })
+        .catch(function (error) {
+          notice("error", errorText(error));
+        })
+        .then(function () {
+          setNotificationBusy("");
+        });
+    }
+
+    function snoozeNotification(notificationId, minutes) {
+      if (notificationBusy) {
+        return;
+      }
+      setNotificationBusy(notificationId);
+      apiJSON("/notifications/" + encodeURIComponent(notificationId) + "/snooze", "POST", {
+        minutes: minutes
+      })
+        .then(function () {
+          refreshNotificationList();
+          notice("ok", "Notification snoozed.");
+        })
+        .catch(function (error) {
+          notice("error", errorText(error));
+        })
+        .then(function () {
+          setNotificationBusy("");
+        });
+    }
+
+    function copyText(text, label) {
+      function copied() {
+        notice("ok", label + " copied.");
+      }
+      function failed() {
+        notice("error", "Could not copy; select the text and copy it manually.");
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(copied, failed);
+        return;
+      }
+      // Plain-HTTP dashboards are not a secure context, so the async clipboard
+      // API may be absent. Fall back to a temporary textarea + selection.
+      var area = document.createElement("textarea");
+      try {
+        area.value = text;
+        area.setAttribute("readonly", "");
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        document.body.appendChild(area);
+        area.select();
+        var ok = document.execCommand("copy");
+        document.body.removeChild(area);
+        if (ok) {
+          copied();
+        } else {
+          failed();
+        }
+      } catch (error) {
+        if (area.parentNode) {
+          area.parentNode.removeChild(area);
+        }
+        failed();
+      }
     }
 
     function shiftMonth(direction) {
@@ -1325,6 +1523,366 @@
       );
     }
 
+    function renderNotifications() {
+      var first = notificationTotal === 0 ? 0 : notificationOffset + 1;
+      var last = notificationOffset + notifications.length;
+      return h(
+        "section",
+        {
+          className: "hc-card hc-notifications",
+          "aria-labelledby": "hc-notifications-title"
+        },
+        h(
+          "div",
+          { className: "hc-notification-head" },
+          h("h2", { id: "hc-notifications-title", className: "hc-card-title" }, "Notifications"),
+          h(
+            "span",
+            {
+              className: "hc-badge",
+              "aria-label": notificationTotal + " unread notifications"
+            },
+            String(notificationTotal)
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              className: "hc-button",
+              onClick: refreshNotificationList,
+              disabled: notificationsLoading
+            },
+            "Refresh"
+          )
+        ),
+        notificationsLoading
+          ? h("p", { className: "hc-empty-inline" }, "Loading notifications…")
+          : notifications.length
+            ? h(
+                "ul",
+                { className: "hc-notification-list" },
+                notifications.map(function (item) {
+                  var isBusy = notificationBusy === item.id;
+                  var actionsDisabled = Boolean(notificationBusy);
+                  var title = item.title || "Calendar reminder";
+                  var meta = "Fires " + formatInstant(item.fire_at);
+                  if (item.snooze_until) {
+                    meta += " · snoozed until " + formatInstant(item.snooze_until);
+                  }
+                  if (item.priority) {
+                    meta += " · " + item.priority + " priority";
+                  }
+                  var delivery = item.last_delivery;
+                  return h(
+                    "li",
+                    { key: item.id, className: "hc-notification" },
+                    h(
+                      "div",
+                      { className: "hc-notification-main" },
+                      h(
+                        "div",
+                        { className: "hc-notification-title-row" },
+                        h("span", { className: "hc-notification-title" }, title),
+                        h(
+                          "span",
+                          {
+                            className:
+                              "hc-state" + (item.state === "failed" ? " hc-state-bad" : "")
+                          },
+                          notificationStateLabel(item.state)
+                        )
+                      ),
+                      h("p", { className: "hc-notification-meta" }, meta),
+                      delivery
+                        ? h(
+                            "p",
+                            { className: "hc-notification-meta" },
+                            "Last delivery: " +
+                              (delivery.channel || "channel") +
+                              " · " +
+                              (delivery.outcome || "unknown") +
+                              (delivery.exit_code === null || delivery.exit_code === undefined
+                                ? ""
+                                : " · exit " + delivery.exit_code)
+                          )
+                        : null
+                    ),
+                    h(
+                      "div",
+                      { className: "hc-notification-actions" },
+                      SNOOZE_CHOICES.map(function (choice) {
+                        return h(
+                          "button",
+                          {
+                            key: choice.minutes,
+                            type: "button",
+                            className: "hc-button hc-small",
+                            disabled: actionsDisabled,
+                            "aria-label":
+                              "Snooze " + title + " for " + choice.label,
+                            onClick: function () {
+                              snoozeNotification(item.id, choice.minutes);
+                            }
+                          },
+                          choice.label
+                        );
+                      }),
+                      h(
+                        "button",
+                        {
+                          type: "button",
+                          className: "hc-button hc-danger hc-small",
+                          disabled: actionsDisabled,
+                          "aria-label": "Dismiss " + title,
+                          onClick: function () {
+                            dismissNotification(item.id);
+                          }
+                        },
+                        isBusy ? "Working…" : "Dismiss"
+                      )
+                    )
+                  );
+                })
+              )
+            : h(
+                "div",
+                { className: "hc-empty-inline" },
+                h("p", null, "You're all caught up."),
+                h(
+                  "p",
+                  { className: "hc-hint" },
+                  "Reminders appear here after a tick materializes them. Check Reminder setup below if nothing ever arrives."
+                )
+              ),
+        h(
+          "div",
+          { className: "hc-pager" },
+          h(
+            "button",
+            {
+              type: "button",
+              className: "hc-button hc-small",
+              disabled: notificationOffset === 0 || notificationsLoading,
+              onClick: function () {
+                setNotificationOffset(function (value) {
+                  return Math.max(0, value - NOTIFICATION_PAGE_SIZE);
+                });
+              }
+            },
+            "Newer"
+          ),
+          h(
+            "span",
+            { className: "hc-hint", "aria-live": "polite" },
+            "Showing " +
+              first +
+              "–" +
+              last +
+              " of " +
+              notificationTotal
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              className: "hc-button hc-small",
+              disabled:
+                notificationsLoading ||
+                notificationOffset + notifications.length >= notificationTotal,
+              onClick: function () {
+                setNotificationOffset(function (value) {
+                  return value + NOTIFICATION_PAGE_SIZE;
+                });
+              }
+            },
+            "Older"
+          )
+        )
+      );
+    }
+
+    function renderReminderSetup() {
+      if (reminderStatusLoading && !reminderStatus) {
+        return h(
+          "section",
+          { className: "hc-card hc-reminder-setup" },
+          h("h2", { className: "hc-card-title" }, "Reminder setup"),
+          h("p", { className: "hc-empty-inline" }, "Checking reminder setup…")
+        );
+      }
+      var settings = reminderStatus;
+      if (!settings) {
+        return h(
+          "section",
+          { className: "hc-card hc-reminder-setup" },
+          h("h2", { className: "hc-card-title" }, "Reminder setup"),
+          h("p", { className: "hc-hint" }, "Checking reminder setup…"),
+          h(
+            "button",
+            {
+              type: "button",
+              className: "hc-button",
+              onClick: function () {
+                setRefreshReminderStatus(function (value) {
+                  return value + 1;
+                });
+              }
+            },
+            "Retry"
+          )
+        );
+      }
+      var checks = settings.checks || [];
+      var failing = checks.filter(function (check) {
+        return !check.ok;
+      });
+      var lastTick = settings.last_tick
+        ? formatInstant(settings.last_tick) +
+          (typeof settings.last_tick_age_seconds === "number"
+            ? " (" + settings.last_tick_age_seconds + " seconds ago)"
+            : "")
+        : "Never observed";
+      return h(
+        "section",
+        {
+          className: "hc-card hc-reminder-setup",
+          "aria-labelledby": "hc-reminder-setup-title"
+        },
+        h(
+          "div",
+          { className: "hc-notification-head" },
+          h(
+            "h2",
+            { id: "hc-reminder-setup-title", className: "hc-card-title" },
+            "Reminder setup"
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              className: "hc-button",
+              onClick: function () {
+                setRefreshReminderStatus(function (value) {
+                  return value + 1;
+                });
+              },
+              disabled: reminderStatusLoading
+            },
+            "Refresh status"
+          )
+        ),
+        h(
+          "dl",
+          { className: "hc-facts" },
+          h("dt", null, "Delivery target"),
+          h(
+            "dd",
+            null,
+            settings.delivery_target_configured ? "Configured" : "Not configured"
+          ),
+          h("dt", null, "Last tick"),
+          h("dd", null, lastTick),
+          h("dt", null, "Cron safety net"),
+          h(
+            "dd",
+            null,
+            settings.cron_appears_running
+              ? "A tick landed within " + settings.cron_freshness_seconds + " seconds"
+              : "No recent tick observed"
+          ),
+          h("dt", null, "In-process ticker"),
+          h(
+            "dd",
+            null,
+            settings.in_process_ticker_enabled
+              ? "Enabled, every " + settings.ticker_interval_seconds + " seconds"
+              : "Disabled (cron is the only scheduler)"
+          ),
+          h("dt", null, "Doctor checks"),
+          h(
+            "dd",
+            null,
+            failing.length
+              ? failing.length + " of " + checks.length + " need attention"
+              : "All " + checks.length + " checks pass"
+          )
+        ),
+        h(
+          "p",
+          { className: "hc-hint" },
+          "This page never creates cron jobs, sends messages, or restarts the dashboard. Run the steps below yourself; reminders are delivered by Hermes cron, and the in-process ticker is optional."
+        ),
+        h(
+          "ol",
+          { className: "hc-steps" },
+          h(
+            "li",
+            null,
+            "Enable the plugin and open this Calendar tab (done if you are reading this)."
+          ),
+          h(
+            "li",
+            null,
+            "Save the tick script below as ",
+            h("code", null, "hermes-calendar-tick.sh"),
+            " somewhere Hermes cron can read, and make it executable."
+          ),
+          h("li", null, "Run the exact cron command shown below once."),
+          h(
+            "li",
+            null,
+            "Optional: enable the in-process ticker in notification preferences for a faster accelerator; cron remains the safety net."
+          ),
+          h("li", null, "Come back and press Refresh status to confirm a recent tick.")
+        ),
+        failing.length
+          ? h(
+              "div",
+              { className: "hc-check-list" },
+              h("h3", null, "Needs attention"),
+              h(
+                "ul",
+                null,
+                failing.map(function (check) {
+                  return h(
+                    "li",
+                    { key: check.name },
+                    h("strong", null, check.name + ": "),
+                    check.detail
+                  );
+                })
+              )
+            )
+          : null,
+        h("h3", null, "Tick script"),
+        h("pre", { className: "hc-command" }, h("code", null, settings.tick_script)),
+        h(
+          "button",
+          {
+            type: "button",
+            className: "hc-button hc-small",
+            onClick: function () {
+              copyText(settings.tick_script, "Tick script");
+            }
+          },
+          "Copy tick script"
+        ),
+        h("h3", null, "Cron command"),
+        h("pre", { className: "hc-command" }, h("code", null, settings.cron_command)),
+        h(
+          "button",
+          {
+            type: "button",
+            className: "hc-button hc-small",
+            onClick: function () {
+              copyText(settings.cron_command, "Cron command");
+            }
+          },
+          "Copy cron command"
+        )
+      );
+    }
+
     function renderMonth() {
       return h(
         "div",
@@ -1465,42 +2023,9 @@
 
     var empty = renderEmpty();
 
-    return h(
+    var calendarSection = h(
       "div",
-      { className: "hc-root" },
-      h(
-        "div",
-        { className: "hc-header" },
-        h("div", null, h("h1", { className: "hc-title" }, "Calendar")),
-        h(
-          "div",
-          { className: "hc-scope-switch", role: "group", "aria-label": "Calendar store" },
-          h(
-            "button",
-            {
-              type: "button",
-              className: "hc-button" + (scope === "profile" ? " hc-active" : ""),
-              "aria-pressed": scope === "profile",
-              onClick: function () {
-                changeScope("profile");
-              }
-            },
-            "Profile"
-          ),
-          h(
-            "button",
-            {
-              type: "button",
-              className: "hc-button" + (scope === "global" ? " hc-active" : ""),
-              "aria-pressed": scope === "global",
-              onClick: function () {
-                changeScope("global");
-              }
-            },
-            "Shared (global)"
-          )
-        )
-      ),
+      { className: "hc-section" },
       h(
         "div",
         { className: "hc-toolbar" },
@@ -1579,7 +2104,6 @@
           )
         )
       ),
-      renderStatus(),
       h(
         "div",
         { className: "hc-controls" },
@@ -1677,16 +2201,112 @@
       renderCalendarForm(),
       renderEventForm(),
       empty,
-      empty ? null : view === "month" ? renderMonth() : renderAgenda(),
+      empty ? null : view === "month" ? renderMonth() : renderAgenda()
+    );
+
+    var notificationSection = h(
+      "div",
+      { className: "hc-section" },
+      renderNotifications(),
+      renderReminderSetup()
+    );
+
+    return h(
+      "div",
+      { className: "hc-root" },
       h(
-        "section",
-        { className: "hc-card hc-slot", "aria-label": "Notification panel placeholder" },
-        h("h2", { className: "hc-card-title" }, "Notifications"),
+        "div",
+        { className: "hc-header" },
+        h("div", null, h("h1", { className: "hc-title" }, "Calendar")),
+        section === "calendar"
+          ? h(
+              "div",
+              { className: "hc-scope-switch", role: "group", "aria-label": "Calendar store" },
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "hc-button" + (scope === "profile" ? " hc-active" : ""),
+                  "aria-pressed": scope === "profile",
+                  onClick: function () {
+                    changeScope("profile");
+                  }
+                },
+                "Profile"
+              ),
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "hc-button" + (scope === "global" ? " hc-active" : ""),
+                  "aria-pressed": scope === "global",
+                  onClick: function () {
+                    changeScope("global");
+                  }
+                },
+                "Shared (global)"
+              )
+            )
+          : null
+      ),
+      h(
+        "div",
+        { className: "hc-tabs", role: "tablist", "aria-label": "Calendar sections" },
         h(
-          "p",
-          { className: "hc-hint" },
-          "Reserved for the reminder notification panel (owned by a later task). This area is intentionally empty; no reminder data is loaded here."
+          "button",
+          {
+            type: "button",
+            role: "tab",
+            id: "hc-tab-calendar",
+            "aria-selected": section === "calendar",
+            "aria-controls": "hc-panel-calendar",
+            className: "hc-tab" + (section === "calendar" ? " hc-active" : ""),
+            onClick: function () {
+              setSection("calendar");
+            }
+          },
+          "Calendar"
+        ),
+        h(
+          "button",
+          {
+            type: "button",
+            role: "tab",
+            id: "hc-tab-notifications",
+            "aria-selected": section === "notifications",
+            "aria-controls": "hc-panel-notifications",
+            "aria-label": "Notifications, " + notificationTotal + " unread",
+            className: "hc-tab" + (section === "notifications" ? " hc-active" : ""),
+            onClick: function () {
+              setSection("notifications");
+            }
+          },
+          "Notifications ",
+          h("span", { className: "hc-badge" }, String(notificationTotal))
         )
+      ),
+      renderStatus(),
+      h(
+        "div",
+        {
+          className: "hc-panel",
+          role: "tabpanel",
+          id: "hc-panel-calendar",
+          "aria-labelledby": "hc-tab-calendar",
+          hidden: section !== "calendar"
+        },
+        calendarSection
+      ),
+      h(
+        "div",
+        {
+          className: "hc-panel",
+          role: "tabpanel",
+          id: "hc-panel-notifications",
+          "aria-labelledby": "hc-tab-notifications",
+          hidden: section !== "notifications"
+        },
+        notificationSection
       )
     );
   }
