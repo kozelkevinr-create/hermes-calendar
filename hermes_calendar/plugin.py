@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from hermes_calendar import __version__
+from hermes_calendar.hermes.tools import TOOL_SPECS, TOOLSET
 from hermes_calendar.plugin_storage import global_dir, profile_dir
 
 PLUGIN_NAME = "hermes-calendar"
@@ -73,8 +74,16 @@ def register(ctx: Any) -> None:
     """
     ctx.register_tool(
         name="calendar_status",
-        toolset="calendar",
+        toolset=TOOLSET,
         schema=CALENDAR_STATUS_SCHEMA,
         handler=calendar_status,
         description="Report plugin version and calendar data locations.",
     )
+    for name, schema, handler, description in TOOL_SPECS:
+        ctx.register_tool(
+            name=name,
+            toolset=TOOLSET,
+            schema=schema,
+            handler=handler,
+            description=description,
+        )
