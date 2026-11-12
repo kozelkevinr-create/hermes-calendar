@@ -32,6 +32,9 @@ TOOL_NAMES = {
     "calendar_update_event",
     "calendar_delete_event",
     "calendar_list_events",
+    "calendar_list_notifications",
+    "calendar_dismiss_notification",
+    "calendar_snooze_notification",
 }
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

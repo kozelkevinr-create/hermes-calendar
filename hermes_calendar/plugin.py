@@ -18,6 +18,7 @@ from typing import Any
 from . import __version__
 from .hermes.tools import TOOL_SPECS, TOOLSET
 from .plugin_storage import global_dir, profile_dir
+from .reminders.ticker import maybe_start_in_process_ticker
 
 PLUGIN_NAME = "hermes-calendar"
 PROFILE_DB_FILENAME = "calendar.db"
@@ -87,3 +88,7 @@ def register(ctx: Any) -> None:
             handler=handler,
             description=description,
         )
+    # Optional accelerator only: disabled by default, needs a running event loop,
+    # and Hermes cancels the task on unload. The cron job remains the primary
+    # trigger (app-notifications.md §6.4).
+    maybe_start_in_process_ticker(ctx)

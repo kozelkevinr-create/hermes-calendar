@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from hermes_calendar.db import store
+from hermes_calendar.db.migrations import SCHEMA_VERSION
 from hermes_calendar.db.store import (
     GLOBAL_DB_FILENAME,
     PROFILE_DB_FILENAME,
@@ -29,7 +30,7 @@ def test_open_profile_store_uses_the_active_profile(
         path = home / "plugin-data" / "hermes-calendar" / PROFILE_DB_FILENAME
         assert path.is_file()
         assert profile_name() == "coding"
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         meta = {
             str(row["key"]): str(row["value"])
             for row in connection.execute("SELECT key, value FROM schema_meta")
@@ -52,7 +53,7 @@ def test_open_global_store_uses_the_shared_root(
     try:
         path = tmp_path / "root" / "plugin-data" / "hermes-calendar" / GLOBAL_DB_FILENAME
         assert path.is_file()
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         meta = {
             str(row["key"]): str(row["value"])
             for row in connection.execute("SELECT key, value FROM schema_meta")
@@ -112,7 +113,7 @@ def test_open_store_retries_a_locked_database(
 
     try:
         assert calls == 3
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     finally:
         connection.close()
 
