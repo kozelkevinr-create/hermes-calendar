@@ -88,7 +88,7 @@ subsystems. Diagnostics go to stderr, `--json` is opt-in, and exit codes are the
 ## Installing into Hermes
 
 ```sh
-hermes plugins install <owner>/hermes-calendar --enable
+hermes plugins install kozelkevinr-create/hermes-calendar --enable
 hermes plugins list
 hermes plugins validate .
 ```
@@ -108,7 +108,7 @@ port, service, or password.
 1. Install and enable the plugin in one step, or enable it after installing:
 
    ```sh
-   hermes plugins install <owner>/hermes-calendar --enable
+   hermes plugins install kozelkevinr-create/hermes-calendar --enable
    # or, for an already-installed plugin:
    hermes plugins enable hermes-calendar
    hermes plugins list          # hermes-calendar should show as enabled
