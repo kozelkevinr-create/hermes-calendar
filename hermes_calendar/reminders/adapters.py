@@ -31,6 +31,7 @@ from typing import Any, Protocol
 
 from ..db.reminders import ChannelRow
 from .models import Availability, DeliveryResult, Notification
+from .render import neutralize_directives
 
 _PERMANENT_HINTS = (
     "400",
@@ -170,14 +171,20 @@ class HermesSendAdapter:
             f"{self._config.subject_prefix}: {notification.title}"
             if self._config.subject_prefix
             else notification.title
-        )[:200]
+        )
+        # Defense in depth for direct adapter callers: the engine renders a
+        # sanitized title already, but no user-controlled string may reach the
+        # chat with a surviving Hermes directive.
+        subject = neutralize_directives(subject)[:200]
+        body = neutralize_directives(notification.body)
+        # Single-token option forms keep a title starting with '-' from being
+        # parsed as an option by ``hermes send``'s argparse. The body is only
+        # ever stdin, never a positional argument.
         argv = [
             self._config.binary,
             "send",
-            "--to",
-            self._config.target,
-            "--subject",
-            subject,
+            f"--to={self._config.target}",
+            f"--subject={subject}",
             "--json",
         ]
 
@@ -185,13 +192,13 @@ class HermesSendAdapter:
             completed = (
                 self._runner(
                     argv,
-                    input_text=notification.body,
+                    input_text=body,
                     timeout=self._config.timeout_seconds,
                 )
                 if self._runner is not None
                 else subprocess_runner(
                     argv,
-                    input_text=notification.body,
+                    input_text=body,
                     timeout=self._config.timeout_seconds,
                 )
             )

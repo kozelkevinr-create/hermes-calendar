@@ -55,7 +55,7 @@ def test_due_reminder_is_delivered_once_through_hermes_send(tmp_path: Path) -> N
         assert second.claimed == 0
         assert len(runner.calls) == 1
         assert runner.calls[0][:2] == ["hermes", "send"]
-        assert "matrix:@alice:example.org" in runner.calls[0]
+        assert "--to=matrix:@alice:example.org" in runner.calls[0]
         assert "--json" in runner.calls[0]
         assert _instance(connection)["state"] == "delivered"
         deliveries = connection.execute(
@@ -436,7 +436,11 @@ def test_chat_message_contains_minimal_sanitized_content(tmp_path: Path) -> None
 
         engine.tick()
 
-        subject = runner.calls[0][runner.calls[0].index("--subject") + 1]
+        subject = next(
+            token.removeprefix("--subject=")
+            for token in runner.calls[0]
+            if token.startswith("--subject=")
+        )
         body = runner.bodies[0]
         assert "123 Main St" not in subject + body
         assert "secret paperwork" not in subject + body

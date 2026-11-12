@@ -142,10 +142,8 @@ def test_argv_is_a_list_and_body_goes_over_stdin() -> None:
     assert seen[0] == [
         "hermes",
         "send",
-        "--to",
-        "telegram:123",
-        "--subject",
-        "Calendar: Dentist in 30 min",
+        "--to=telegram:123",
+        "--subject=Calendar: Dentist in 30 min",
         "--json",
     ]
     assert bodies[0] == _notification().body
@@ -163,7 +161,8 @@ def test_empty_subject_prefix_is_omitted() -> None:
     HermesSendAdapter(
         HermesSendConfig(target="telegram:123", subject_prefix=""), runner=runner
     ).send(_notification())
-    assert seen[0][seen[0].index("--subject") + 1] == "Dentist in 30 min"
+    subject = next(token for token in seen[0] if token.startswith("--subject="))
+    assert subject == "--subject=Dentist in 30 min"
 
 
 @pytest.mark.parametrize(
@@ -289,7 +288,11 @@ def test_notification_title_caps_at_120(tmp_path: Path) -> None:
 
         enable_chat(connection)
         make_engine(connection, clock=FakeClock(1_800_000_000), runner=runner).tick()
-        subject = runner.argv[runner.argv.index("--subject") + 1]
+        subject = next(
+            token.removeprefix("--subject=")
+            for token in runner.argv
+            if token.startswith("--subject=")
+        )
         assert len(subject) <= 200
         assert subject.endswith("…")
     finally:
