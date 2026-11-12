@@ -1,5 +1,3 @@
-# Decisions
-
 Implementation decisions taken where the design documents leave room, one line each.
 Date, decision, why.
 
@@ -11,3 +9,10 @@ Date, decision, why.
 - 2026-11-12 — A profile store's identity is its profile directory name from `profile_dir().parent.parent.name`; opening an existing store verifies its scope but not its `store_id`. Why: `core.md` §4.1 defines identity by directory name and says a rename is a store-id migration, so a hard failure on drift would block that migration.
 - 2026-11-12 — Global-store events use `draft.owner_profile_id` or the write `actor` as creator; profile-store events always take the calendar owner. Why: `core.md` §4.6 requires the creating profile in the shared store, while profile ownership is fixed by the store.
 - 2026-11-12 — Keep the shared `plugin_storage.open_db` pragma stack, including its 5 s `busy_timeout`, rather than overriding it to the design's 10 s. Why: the task requires that helper to own connection setup, and M1 write transactions are short; the helper remains the one place to tune it.
+- 2026-11-12 — Use `python-dateutil>=2.9` for the RFC 5545 grammar instead of a hand-rolled parser; it is pure Python and already present in the Hermes runtime (2.9.0.post0 in the installed environments), and the design explicitly asks for a vetted library (§6.2).
+- 2026-11-12 — Give `hermes_calendar.recurrence` explicit `MasterEvent`/`OverrideEvent` dataclasses rather than accepting SQLite rows; this keeps the module pure, typed, and free of database imports, with mapping left to the storage layer.
+- 2026-11-12 — Resolve floating timed events in UTC during expansion; `expand()` has no calendar default zone, so this preserves the wall clock without inventing a caller-specific zone. Callers that have a calendar zone pass it as `start_tz`.
+- 2026-11-12 — Expand an RRULE-less master as `{DTSTART} ∪ RDATE − EXDATE` rather than returning only the master; this follows the normative recurrence-set definition in §6.1 and makes RDATE-only series work.
+- 2026-11-12 — Filter all-day occurrences by the UTC dates of the supplied window; this matches the date-based query in §6.8 and keeps all-day dates free of time-zone shifts.
+- 2026-11-12 — Accept UTC window bounds as either timezone-aware datetimes or epoch seconds; epoch seconds are what SQLite stores, and normalizing once at the public boundary keeps the rest of the engine in datetimes.
+- 2026-11-12 — Apply overrides only to occurrences the RRULE/RDATE window generated; an override moved into the window from an original occurrence after the window is not discovered, which avoids scanning an unbounded future for a rare case.
