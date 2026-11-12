@@ -7,7 +7,9 @@ taking the write lock so several profile processes can race to create the shared
 global store safely (``core.md`` §5.9).
 
 Migrations are per store. Opening a store whose version is newer than this build
-is refused rather than silently downgraded.
+is refused rather than silently downgraded. Versions are additive: a v1 store
+upgrades in place by applying v2, and a fresh store applies v1 then v2 inside the
+same write transaction.
 """
 
 from __future__ import annotations
@@ -17,11 +19,12 @@ import time
 from typing import Literal
 
 from .errors import SchemaVersionError, StoreScopeError
-from .schema import V1_STATEMENTS
+from .schema import V1_STATEMENTS, V2_GLOBAL_STATEMENTS, V2_PROFILE_STATEMENTS
 
 StoreScope = Literal["profile", "global"]
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+V1_SCHEMA_VERSION = 1
 LOCAL_SOURCE_ID = "src_local"
 GLOBAL_CALENDAR_ID = "cal_global"
 GLOBAL_STORE_ID = "global"
@@ -73,6 +76,8 @@ def migrate(
             )
         else:
             _verify_scope(connection, store_scope)
+        if version < SCHEMA_VERSION:
+            _apply_v2(connection, store_scope=store_scope)
         connection.execute("COMMIT")
     except BaseException:
         connection.execute("ROLLBACK")
@@ -125,7 +130,7 @@ def _apply_v1(
     connection.executemany(
         "INSERT INTO schema_meta (key, value) VALUES (?, ?)",
         (
-            ("schema_version", str(SCHEMA_VERSION)),
+            ("schema_version", str(V1_SCHEMA_VERSION)),
             ("created_by", "hermes-calendar"),
             ("min_available_seq", "1"),
             ("store_scope", store_scope),
@@ -159,4 +164,40 @@ def _apply_v1(
             (GLOBAL_CALENDAR_ID, LOCAL_SOURCE_ID, now, now),
         )
     connection.execute("UPDATE change_context SET suppress = 0 WHERE id = 1")
+    connection.execute(f"PRAGMA user_version = {V1_SCHEMA_VERSION}")
+
+
+def _apply_v2(connection: sqlite3.Connection, *, store_scope: StoreScope) -> None:
+    """Add notification tables (profile) or coordination tables (global).
+
+    The two stores deliberately get different v2 tables: ``core.md`` §3.7 says
+    the global store holds no notification content state, while the app design
+    needs one shared lease and a content-free dedup ledger to prevent duplicate
+    global-calendar delivery across profiles (``app-notifications.md`` §6.2).
+    """
+    statements = V2_PROFILE_STATEMENTS if store_scope == "profile" else V2_GLOBAL_STATEMENTS
+    for statement in statements:
+        connection.execute(statement)
+
+    if store_scope == "profile":
+        now = int(time.time())
+        # The in-app channel is always available. The chat channel starts
+        # disabled with no target: the target is explicit setup configuration,
+        # never inferred from ``hermes send --list`` or the environment.
+        connection.executemany(
+            """
+            INSERT INTO notification_channels
+              (id, kind, enabled, config_json, secret_ref, created_utc)
+            VALUES (?, ?, ?, '{}', NULL, ?)
+            """,
+            (
+                ("in-app", "in_app", 1, now),
+                ("phone", "hermes_send", 0, now),
+            ),
+        )
+
+    connection.execute(
+        "UPDATE schema_meta SET value = ? WHERE key = 'schema_version'",
+        (str(SCHEMA_VERSION),),
+    )
     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

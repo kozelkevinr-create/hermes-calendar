@@ -24,6 +24,7 @@ from .errors import (
     StoreScopeError,
 )
 from .migrations import SCHEMA_VERSION, migrate
+from .reminders import NotificationNotFoundError, ReminderStore, dedup_key
 from .repository import Origin, Repository
 from .store import (
     GLOBAL_DB_FILENAME,
@@ -41,14 +42,17 @@ __all__ = [
     "DatabaseError",
     "EventNotFoundError",
     "NotFoundError",
+    "NotificationNotFoundError",
     "Origin",
     "Repository",
+    "ReminderStore",
     "RepositoryError",
     "RevisionConflict",
     "SchemaVersionError",
     "SourceNotFoundError",
     "StoreScopeError",
     "connect",
+    "dedup_key",
     "migrate",
     "open_global_store",
     "open_profile_store",

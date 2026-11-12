@@ -293,3 +293,30 @@ def test_global_store_rejects_a_profile_calendar(tmp_path: Path) -> None:
             )
     finally:
         connection.close()
+
+
+def test_migration_skips_v2_when_another_process_won_the_lock(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    connection = connect(tmp_path / "calendar.db")
+    try:
+        migrate(
+            connection,
+            store_scope="profile",
+            store_id="profile:one",
+            owner_profile_id="one",
+        )
+        versions = iter((1, SCHEMA_VERSION, SCHEMA_VERSION))
+        monkeypatch.setattr(migrations, "_read_user_version", lambda _connection: next(versions))
+
+        version = migrate(
+            connection,
+            store_scope="profile",
+            store_id="profile:one",
+            owner_profile_id="one",
+        )
+
+        assert version == SCHEMA_VERSION
+        assert "reminder_instances" in _names(connection, "table")
+    finally:
+        connection.close()

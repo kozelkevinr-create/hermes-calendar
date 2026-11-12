@@ -34,6 +34,7 @@ from ..db import (
     open_global_store,
     open_profile_store,
 )
+from ..reminders import service as reminder_service
 from ..service import (
     DEFAULT_SCOPE,
     MAX_TEXT,
@@ -521,6 +522,183 @@ def calendar_export_ics(args: Mapping[str, Any]) -> dict[str, Any]:
     )
 
 
+_LIST_NOTIFICATIONS_SCHEMA = _schema(
+    "calendar_list_notifications",
+    "List reminders for the active profile, newest first. By default dismissed "
+    "notifications are hidden. Each item contains only the event title, state, "
+    "priority, times, and the latest delivery outcome; descriptions, locations, "
+    "attendees, and message bodies are deliberately omitted. Use "
+    "calendar_snooze_notification or calendar_dismiss_notification to act on one.",
+    {
+        "include_dismissed": {
+            "type": "boolean",
+            "description": "Include acknowledged notifications. Default false.",
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "Maximum rows to return. Default 20.",
+        },
+        "state": {
+            "type": "string",
+            "enum": list(reminder_service.VISIBLE_STATES),
+            "description": "Optional exact state filter.",
+        },
+    },
+)
+
+_SNOOZE_NOTIFICATION_SCHEMA = _schema(
+    "calendar_snooze_notification",
+    "Snooze a reminder so it fires again after 5, 10, or 60 minutes. The "
+    "reminder returns to the scheduled state and a later tick delivers it once. "
+    "Use the id from calendar_list_notifications.",
+    {
+        "notification_id": {
+            "type": "string",
+            "description": "Reminder instance id. Required.",
+        },
+        "minutes": {
+            "type": "integer",
+            "enum": [5, 10, 60],
+            "description": "Snooze duration in minutes. Required.",
+        },
+    },
+    ("notification_id", "minutes"),
+)
+
+_DISMISS_NOTIFICATION_SCHEMA = _schema(
+    "calendar_dismiss_notification",
+    "Dismiss (acknowledge) a reminder so it no longer appears in the default "
+    "notification list. Dismissing an already dismissed reminder is a no-op. "
+    "Use the id from calendar_list_notifications.",
+    {
+        "notification_id": {
+            "type": "string",
+            "description": "Reminder instance id. Required.",
+        },
+    },
+    ("notification_id",),
+)
+
+
+@contextmanager
+def _notification_connections() -> Iterator[tuple[sqlite3.Connection, sqlite3.Connection | None]]:
+    """Open the profile store and, best-effort, the shared global store."""
+    profile_connection = open_profile_store()
+    global_connection: sqlite3.Connection | None = None
+    try:
+        try:
+            global_connection = open_global_store()
+        except (DatabaseError, sqlite3.Error):
+            global_connection = None
+        yield profile_connection, global_connection
+    finally:
+        if global_connection is not None:
+            global_connection.close()
+        profile_connection.close()
+
+
+def _require_str(args: Mapping[str, Any], name: str) -> str:
+    """Return a required non-empty string notification argument."""
+    value = args.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidArgument(f"{name} is required and must be a non-empty string")
+    if len(value) > _MAX_TEXT:
+        raise InvalidArgument(f"{name} must be at most {_MAX_TEXT} characters")
+    return value.strip()
+
+
+def _optional_bool(args: Mapping[str, Any], name: str, *, default: bool) -> bool:
+    """Return an optional boolean notification argument."""
+    value = args.get(name, default)
+    if not isinstance(value, bool):
+        raise InvalidArgument(f"{name} must be a boolean")
+    return value
+
+
+def _require_int(args: Mapping[str, Any], name: str, *, minimum: int) -> int:
+    """Return a required integer notification argument at or above ``minimum``."""
+    value = args.get(name)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise InvalidArgument(f"{name} is required and must be an integer")
+    if value < minimum:
+        raise InvalidArgument(f"{name} must be at least {minimum}")
+    return value
+
+
+def _optional_int(args: Mapping[str, Any], name: str, *, minimum: int) -> int | None:
+    """Return an optional integer notification argument at or above ``minimum``."""
+    value = args.get(name)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise InvalidArgument(f"{name} must be an integer")
+    if value < minimum:
+        raise InvalidArgument(f"{name} must be at least {minimum}")
+    return value
+
+
+def _notification_state(args: Mapping[str, Any]) -> str | None:
+    value = args.get("state")
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in reminder_service.VISIBLE_STATES:
+        raise ToolArgumentError(
+            "state must be one of "
+            + ", ".join(repr(item) for item in reminder_service.VISIBLE_STATES)
+        )
+    return value
+
+
+@_tool
+def calendar_list_notifications(args: Mapping[str, Any]) -> dict[str, Any]:
+    """List notification instances for the active profile."""
+    include_dismissed = _optional_bool(args, "include_dismissed", default=False)
+    limit = _optional_int(args, "limit", minimum=1)
+    effective_limit = 20 if limit is None else min(limit, 100)
+    state = _notification_state(args)
+    with _notification_connections() as (profile_connection, global_connection):
+        notifications = reminder_service.list_notifications(
+            profile_connection,
+            global_connection=global_connection,
+            include_dismissed=include_dismissed,
+            limit=effective_limit,
+            state=state,
+        )
+    return {"scope": "profile", "count": len(notifications), "notifications": notifications}
+
+
+@_tool
+def calendar_snooze_notification(args: Mapping[str, Any]) -> dict[str, Any]:
+    """Snooze one notification for 5, 10, or 60 minutes."""
+    notification_id = _require_str(args, "notification_id")
+    minutes = _require_int(args, "minutes", minimum=5)
+    if minutes not in reminder_service.SNOOZE_MINUTES:
+        raise ToolArgumentError("minutes must be one of 5, 10, 60")
+    with _notification_connections() as (profile_connection, global_connection):
+        notification = reminder_service.snooze_notification(
+            profile_connection,
+            notification_id=notification_id,
+            minutes=minutes,
+            global_connection=global_connection,
+        )
+    return {"scope": "profile", "notification": notification}
+
+
+@_tool
+def calendar_dismiss_notification(args: Mapping[str, Any]) -> dict[str, Any]:
+    """Dismiss (acknowledge) one notification."""
+    notification_id = _require_str(args, "notification_id")
+    with _notification_connections() as (profile_connection, global_connection):
+        notification = reminder_service.dismiss_notification(
+            profile_connection,
+            notification_id=notification_id,
+            global_connection=global_connection,
+        )
+    return {"scope": "profile", "notification": notification}
+
+
 def _spec(
     schema: dict[str, Any], handler: Callable[..., str]
 ) -> tuple[str, dict[str, Any], Callable[..., str], str]:
@@ -538,6 +716,9 @@ TOOL_SPECS: tuple[tuple[str, dict[str, Any], Callable[..., str], str], ...] = (
     _spec(_LIST_EVENTS_SCHEMA, calendar_list_events),
     _spec(_IMPORT_ICS_SCHEMA, calendar_import_ics),
     _spec(_EXPORT_ICS_SCHEMA, calendar_export_ics),
+    _spec(_LIST_NOTIFICATIONS_SCHEMA, calendar_list_notifications),
+    _spec(_SNOOZE_NOTIFICATION_SCHEMA, calendar_snooze_notification),
+    _spec(_DISMISS_NOTIFICATION_SCHEMA, calendar_dismiss_notification),
 )
 
 __all__ = [
@@ -545,10 +726,13 @@ __all__ = [
     "calendar_create_calendar",
     "calendar_create_event",
     "calendar_delete_event",
+    "calendar_dismiss_notification",
     "calendar_export_ics",
     "calendar_get_event",
     "calendar_import_ics",
     "calendar_list_calendars",
     "calendar_list_events",
+    "calendar_list_notifications",
+    "calendar_snooze_notification",
     "calendar_update_event",
 ]

@@ -1,11 +1,19 @@
-"""Schema v1 DDL.
+"""SQLite DDL for the calendar stores.
 
-This module is the single definition of the SQLite schema. It mirrors
-``docs/design/core.md`` §5 with these M1 omissions, which are explicitly out of
-scope for this task: the disposable instance cache (``event_instances``,
+This module is the single definition of the SQLite schema. V1 mirrors
+``docs/design/core.md`` §5 with these omissions, which are explicitly out of
+scope for that milestone: the disposable instance cache (``event_instances``,
 ``series_state`` and their invalidation triggers), sync-owned tables
 (``sync_batches``, ``sync_cursors``, ``sync_conflicts``), full-text search,
 notification delivery tables, and custom ``VTIMEZONE`` blobs.
+
+V2 adds the notification-owned tables reconciled in ``core.md`` §5.11 and
+``docs/design/app-notifications.md`` §6.5. Per ``core.md`` §3.7 and §5.11 those
+tables live in the **per-profile** store only. The shared global store has no
+notification content state; it receives only the two coordination tables the
+app design needs (``reminder_lease`` and the content-free
+``reminder_delivery_ledger``), which ``docs/DECISIONS.md`` records as
+coordination state rather than notification state.
 
 Keeping each statement separate (rather than one ``executescript`` call) lets the
 migration runner execute the whole schema inside one ``BEGIN IMMEDIATE``
@@ -718,5 +726,130 @@ V1_STATEMENTS: tuple[str, ...] = (
              THEN unixepoch() END
       );
     END
+    """,
+)
+
+
+# --------------------------------------------------------------------------- v2
+#
+# Notification-owned tables (profile store). Column names follow
+# ``docs/design/core.md`` §5.11 exactly; the app design's §6.5 sketch is the
+# same schema after reconciliation. ``dedup_key`` is
+# ``sha256(store_id | event_id | reminder_id | recurrence_key)`` and the direct
+# UNIQUE constraint is the duplicate-delivery spine.
+
+V2_PROFILE_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE reminder_instances (
+      id                   TEXT PRIMARY KEY,
+      store_id             TEXT NOT NULL,
+      event_id             TEXT NOT NULL,
+      reminder_id          TEXT NOT NULL,
+      recurrence_key       TEXT NOT NULL,
+      occurrence_start_utc INTEGER NOT NULL,
+      offset_seconds       INTEGER NOT NULL,
+      fire_at_utc          INTEGER NOT NULL,
+      priority             TEXT NOT NULL DEFAULT 'normal'
+                           CHECK (priority IN ('digest', 'normal', 'high', 'critical')),
+      channel_policy_json  TEXT NOT NULL DEFAULT '{}'
+                           CHECK (json_valid(channel_policy_json)),
+      state                TEXT NOT NULL DEFAULT 'scheduled'
+                           CHECK (state IN ('scheduled', 'firing', 'retrying',
+                                            'delivered', 'snoozed', 'acknowledged',
+                                            'suppressed', 'cancelled', 'failed',
+                                            'dead_letter')),
+      attempt              INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+      lease_until_utc      INTEGER,
+      snooze_until_utc     INTEGER,
+      dedup_key            TEXT NOT NULL,
+      created_utc          INTEGER NOT NULL,
+      updated_utc          INTEGER NOT NULL,
+      UNIQUE (store_id, event_id, reminder_id, recurrence_key),
+      UNIQUE (dedup_key)
+    )
+    """,
+    """
+    CREATE INDEX idx_reminder_instances_due
+      ON reminder_instances(state, fire_at_utc)
+    """,
+    """
+    CREATE INDEX idx_reminder_instances_event
+      ON reminder_instances(store_id, event_id)
+    """,
+    """
+    CREATE TABLE notification_deliveries (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      reminder_instance_id TEXT NOT NULL
+                           REFERENCES reminder_instances(id) ON DELETE CASCADE,
+      channel              TEXT NOT NULL,
+      target               TEXT NOT NULL,
+      attempt              INTEGER NOT NULL,
+      started_utc          INTEGER NOT NULL,
+      finished_utc         INTEGER,
+      outcome              TEXT NOT NULL
+                           CHECK (outcome IN ('success', 'transient', 'permanent', 'unknown')),
+      exit_code            INTEGER,
+      provider_id          TEXT,
+      error                TEXT,
+      latency_ms           INTEGER
+    )
+    """,
+    """
+    CREATE INDEX idx_notification_deliveries_instance
+      ON notification_deliveries(reminder_instance_id)
+    """,
+    """
+    CREATE TABLE notification_channels (
+      id          TEXT PRIMARY KEY,
+      kind        TEXT NOT NULL,
+      enabled     INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+      config_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(config_json)),
+      secret_ref  TEXT,
+      created_utc INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE notification_prefs (
+      key        TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL CHECK (json_valid(value_json)),
+      updated_utc INTEGER NOT NULL
+    ) WITHOUT ROWID
+    """,
+    """
+    CREATE TABLE web_push_subscriptions (
+      id               TEXT PRIMARY KEY,
+      endpoint         TEXT NOT NULL UNIQUE,
+      p256dh           TEXT NOT NULL,
+      auth             TEXT NOT NULL,
+      user_agent       TEXT,
+      created_utc      INTEGER NOT NULL,
+      last_success_utc INTEGER,
+      failure_count    INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+)
+
+# The global store owns coordination state only: one delivery lease and a
+# content-free ledger of dedup keys already sent. Neither row contains event
+# content, a target, or a message body.
+V2_GLOBAL_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE reminder_lease (
+      scope             TEXT PRIMARY KEY CHECK (scope = 'global'),
+      owner_profile_id  TEXT NOT NULL,
+      lease_expires_utc INTEGER NOT NULL,
+      heartbeat_utc     INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE reminder_delivery_ledger (
+      dedup_key     TEXT PRIMARY KEY,
+      delivered_utc INTEGER NOT NULL,
+      profile_id    TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX idx_reminder_ledger_delivered
+      ON reminder_delivery_ledger(delivered_utc)
     """,
 )

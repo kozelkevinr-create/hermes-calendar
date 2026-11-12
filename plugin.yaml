@@ -26,4 +26,7 @@ provides_tools:
   - calendar_list_events
   - calendar_import_ics
   - calendar_export_ics
+  - calendar_list_notifications
+  - calendar_dismiss_notification
+  - calendar_snooze_notification
 provides_hooks: []

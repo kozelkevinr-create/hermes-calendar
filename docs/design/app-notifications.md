@@ -1091,7 +1091,7 @@ Rules:
 
 | Threat | Mitigation |
 |---|---|
-| Calendar text injected into `hermes send`/`notify-send` | Never build a shell string; use `argv`; sanitize control chars; cap length; no template evaluation |
+| Calendar text injected into `hermes send`/`notify-send` | Never build a shell string; use `argv` with single-token `--to=`/`--subject=` options; neutralize every Hermes message directive (`MEDIA:`, `[[as_document]]`, `[[audio_as_voice]]`) including case/whitespace/zero-width/full-width variants and break bare absolute/`~/`/drive-letter local paths before rendering; sanitize control chars; cap length; no template evaluation |
 | Mention injection (`@everyone`, `<!channel>`) | Escape/disable mentions per adapter; snapshot tests |
 | Wrong room/target | Target allowlist from setup; explicit DM; refuse room targets unless opted in per channel |
 | Secret leakage | Secrets in Hermes `.env`/OS keyring, referenced by `secret_ref`; never in SQLite, logs, or the JS bundle |
