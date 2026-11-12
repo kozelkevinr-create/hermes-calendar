@@ -635,7 +635,7 @@ global calendar, aggregation, and publishing composable.
 | Store | Location | Contents | Scope |
 |---|---|---|---|
 | Profile DB | `plugin_db()` as provided by Hermes | Profile local calendars and events, external accounts (`auth_ref` only), external-calendar cache, mappings owned by this profile, `mapping_event`, outbox, cursors, conflicts, revisions | One profile |
-| Global DB | `calendar.global_db_path`, default `$HERMES_HOME/plugin-data/hermes-calendar/global/calendar.db` | The one global local calendar, its events, its mappings, `mapping_event`, outbox, `change_log`, `sync_lease`, schema metadata | Shared by every profile on the gateway |
+| Global DB | `calendar.global_db_path`, default `<get_default_hermes_root()>/plugin-data/hermes-calendar/calendar-global.db` | The one global local calendar, its events, its mappings, `mapping_event`, outbox, `change_log`, `sync_lease`, schema metadata | Shared by every profile on the gateway |
 | Credential vault | Beside the profile DB, encrypted | Passwords, refresh tokens, feed URLs | One profile |
 
 The global DB is an **explicit, documented exception** to the profile-scoped
@@ -1724,7 +1724,7 @@ hour".
 7. **Shared calendars.** Read-only shared collections are assumed; confirm
    whether Nextcloud/iCloud delegated write access is in scope.
 8. **Global store placement.** Is
-   `$HERMES_HOME/plugin-data/hermes-calendar/global/` writable and shared in
+   `<get_default_hermes_root()>/plugin-data/hermes-calendar/` writable and shared in
    every supported deployment (containers, per-profile volumes, hosted
    gateways)? If not, do we ship the hub-profile service or wait for a
    gateway-wide storage API?
