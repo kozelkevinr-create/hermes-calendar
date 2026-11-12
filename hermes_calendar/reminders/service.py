@@ -70,6 +70,11 @@ def _rfc3339(epoch: int) -> str:
     return datetime.fromtimestamp(epoch, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _timestamp_payload(epoch: int) -> dict[str, object]:
+    """Render an instant as epoch seconds plus its RFC 3339 UTC form."""
+    return {"epoch": epoch, "iso": _rfc3339(epoch)}
+
+
 def _delivery_payload(record: DeliveryRecord) -> dict[str, object]:
     return {
         "channel": record.channel,
@@ -119,6 +124,7 @@ def notification_payload(
             None if instance.snooze_until_utc is None else _rfc3339(instance.snooze_until_utc)
         ),
         "attempt": instance.attempt,
+        "updated_at": _timestamp_payload(instance.updated_utc),
     }
     if include_deliveries:
         latest = profile_store.latest_delivery(instance.id)
@@ -134,12 +140,17 @@ def list_notifications(
     limit: int = 20,
     offset: int = 0,
     state: str | None = None,
+    since: int | None = None,
 ) -> list[dict[str, object]]:
-    """Return one page of notification payloads newest-first."""
+    """Return one page of notification payloads newest-first.
+
+    ``since`` filters on ``updated_at`` being strictly greater than the given
+    epoch second, so a client can poll for changes without re-reading the page.
+    """
     profile_store = ReminderStore(profile_connection)
     global_store = None if global_connection is None else ReminderStore(global_connection)
     states = _states_for(include_dismissed=include_dismissed, state=state)
-    instances = profile_store.list_instances(states=states, limit=limit, offset=offset)
+    instances = profile_store.list_instances(states=states, limit=limit, offset=offset, since=since)
     return [notification_payload(instance, profile_store, global_store) for instance in instances]
 
 
@@ -148,10 +159,11 @@ def count_notifications(
     *,
     include_dismissed: bool = False,
     state: str | None = None,
+    since: int | None = None,
 ) -> int:
     """Count the notification rows the same filters would page through."""
     states = _states_for(include_dismissed=include_dismissed, state=state)
-    return ReminderStore(profile_connection).count_instances(states=states)
+    return ReminderStore(profile_connection).count_instances(states=states, since=since)
 
 
 def notification_page(
@@ -162,8 +174,11 @@ def notification_page(
     limit: int = 20,
     offset: int = 0,
     state: str | None = None,
+    since: int | None = None,
+    now: int | None = None,
 ) -> dict[str, object]:
-    """Return a paginated notification page with its unpaged total."""
+    """Return a paginated notification page with its unpaged total and clock."""
+    server_time = int(time.time()) if now is None else int(now)
     notifications = list_notifications(
         profile_connection,
         global_connection=global_connection,
@@ -171,17 +186,20 @@ def notification_page(
         limit=limit,
         offset=offset,
         state=state,
+        since=since,
     )
     total = count_notifications(
         profile_connection,
         include_dismissed=include_dismissed,
         state=state,
+        since=since,
     )
     return {
         "count": len(notifications),
         "total": total,
         "limit": limit,
         "offset": offset,
+        "server_time": _timestamp_payload(server_time),
         "notifications": notifications,
     }
 

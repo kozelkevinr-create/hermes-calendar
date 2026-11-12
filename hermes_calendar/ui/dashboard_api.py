@@ -22,11 +22,13 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any, cast
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from .. import __version__
 from ..hermes.tools import error_payload
 from ..ics import MAX_ICS_BYTES
 from ..plugin import calendar_status
@@ -39,6 +41,10 @@ __all__ = ["router"]
 _LOG = logging.getLogger(__name__)
 
 router = APIRouter()
+
+#: The stable HTTP contract version served under ``/api/plugins/hermes-calendar``.
+#: Additive changes only while this stays ``"1"``; a breaking change bumps it.
+API_VERSION = "1"
 
 MAX_JSON_BYTES = 256 * 1024
 MAX_IMPORT_BODY_BYTES = MAX_ICS_BYTES * 2 + 64 * 1024
@@ -254,6 +260,30 @@ def _required_query_int(value: str | None, name: str, *, minimum: int) -> int:
     if parsed < minimum:
         raise InvalidArgument(f"{name} must be at least {minimum}")
     return parsed
+
+
+def _query_since(value: str | None) -> int | None:
+    """Parse ``since`` as epoch seconds or an ISO 8601 timestamp with an offset."""
+    if value is None:
+        return None
+    text = value.strip()
+    message = "since must be epoch seconds or an ISO 8601 timestamp with an explicit UTC offset"
+    if not text:
+        raise InvalidArgument(message)
+    if len(text) > MAX_TIME_LENGTH:
+        raise InvalidArgument(f"since must be at most {MAX_TIME_LENGTH} characters")
+    if text.isdigit():
+        if len(text) > 16:
+            raise InvalidArgument("since must be at most 16 digits of epoch seconds")
+        return int(text)
+    candidate = f"{text[:-1]}+00:00" if text.endswith(("Z", "z")) else text
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError as exc:
+        raise InvalidArgument(message) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise InvalidArgument("since must include an explicit UTC offset (for example Z or +02:00)")
+    return int(parsed.timestamp())
 
 
 def _scope(value: str | None) -> Scope:
@@ -548,8 +578,13 @@ async def list_notifications(
     offset: str | None = None,
     include_dismissed: str | None = None,
     state: str | None = None,
+    since: str | None = None,
 ) -> JSONResponse:
-    """List one bounded page of profile notifications, newest first."""
+    """List one bounded page of profile notifications, newest first.
+
+    ``since`` enables incremental polling: it keeps only rows whose ``updated_at``
+    is strictly greater than the supplied epoch second or ISO 8601 instant.
+    """
 
     def operation() -> dict[str, Any]:
         page_limit = _query_int(
@@ -573,6 +608,7 @@ async def list_notifications(
                 "state must be one of "
                 + ", ".join(repr(item) for item in reminder_service.VISIBLE_STATES)
             )
+        since_value = _query_since(since)
         with reminder_service.notification_stores() as (profile_connection, global_connection):
             return reminder_service.notification_page(
                 profile_connection,
@@ -581,6 +617,7 @@ async def list_notifications(
                 limit=page_limit,
                 offset=page_offset,
                 state=state_value,
+                since=since_value,
             )
 
     return await _run(operation)
@@ -634,6 +671,16 @@ async def reminders_status() -> JSONResponse:
     def operation() -> dict[str, Any]:
         with reminder_service.notification_stores() as (profile_connection, global_connection):
             return reminder_status(profile_connection, global_connection=global_connection)
+
+    return await _run(operation)
+
+
+@router.get("/version")
+async def version() -> JSONResponse:
+    """Return the stable API contract version and the plugin version."""
+
+    def operation() -> dict[str, Any]:
+        return {"api_version": API_VERSION, "plugin_version": __version__}
 
     return await _run(operation)
 
