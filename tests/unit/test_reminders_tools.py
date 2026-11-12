@@ -130,3 +130,30 @@ def test_unknown_notification_returns_not_found(
     payload = _payload(calendar_dismiss_notification({"notification_id": "missing"}))
     assert payload["ok"] is False
     assert payload["code"] == "not_found"
+
+
+def test_notification_argument_validation_edges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "root" / "profiles" / "alice"))
+    open_profile_store().close()
+
+    payload = _payload(calendar_list_notifications({"include_dismissed": "yes"}))
+    assert payload["code"] == "invalid_argument"
+    payload = _payload(calendar_list_notifications({"limit": True}))
+    assert payload["code"] == "invalid_argument"
+    payload = _payload(calendar_list_notifications({"limit": 0}))
+    assert payload["code"] == "invalid_argument"
+    payload = _payload(calendar_list_notifications({"include_dismissed": False, "limit": 1}))
+    assert payload["ok"] is True
+
+    payload = _payload(calendar_snooze_notification({"notification_id": "", "minutes": 5}))
+    assert payload["code"] == "invalid_argument"
+    payload = _payload(
+        calendar_snooze_notification({"notification_id": "x" * 20_001, "minutes": 5})
+    )
+    assert payload["code"] == "invalid_argument"
+    payload = _payload(calendar_snooze_notification({"notification_id": "id", "minutes": "10"}))
+    assert payload["code"] == "invalid_argument"
+    payload = _payload(calendar_snooze_notification({"notification_id": "id", "minutes": 4}))
+    assert payload["code"] == "invalid_argument"

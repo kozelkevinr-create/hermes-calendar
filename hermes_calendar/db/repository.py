@@ -191,8 +191,9 @@ class Repository:
     ) -> list[Event]:
         """Return non-recurring, non-deleted events overlapping ``[start, end)``.
 
-        All-day events participate through their UTC-midnight sort keys. Recurring
-        masters and overrides are excluded in this M1 slice.
+        All-day events participate through their UTC-midnight sort keys. Rows
+        with an RRULE are excluded because the service expands them; RDATE-only
+        rows are still returned here and filtered by the service's master list.
         """
         if start_utc >= end_utc:
             raise ValueError("start_utc must be earlier than end_utc")
@@ -210,6 +211,59 @@ class Repository:
             (calendar, end_utc, start_utc),
         ).fetchall()
         return [self._event_from_row(row) for row in rows]
+
+    def list_masters(self, calendar: str) -> list[Event]:
+        """Return non-deleted recurring masters (RRULE or RDATE) in a calendar."""
+        rows = self._connection.execute(
+            """
+            SELECT * FROM events
+             WHERE calendar_id = ?
+               AND deleted_utc IS NULL
+               AND parent_id IS NULL
+               AND (rrule IS NOT NULL OR rdate_json IS NOT NULL)
+             ORDER BY start_utc, id
+            """,
+            (calendar,),
+        ).fetchall()
+        return [self._event_from_row(row) for row in rows]
+
+    def list_overrides(self, parent_id: str) -> list[Event]:
+        """Return every override row for a master, including tombstones."""
+        rows = self._connection.execute(
+            """
+            SELECT * FROM events
+             WHERE parent_id = ?
+             ORDER BY recurrence_key, id
+            """,
+            (parent_id,),
+        ).fetchall()
+        return [self._event_from_row(row) for row in rows]
+
+    def get_event_by_uid(self, calendar: str, uid: str) -> Event | None:
+        """Return the master row with ``uid`` in ``calendar``, or ``None``.
+
+        Tombstoned rows are included so an idempotent import can update and
+        restore an existing UID instead of creating a duplicate.
+        """
+        row = self._connection.execute(
+            """
+            SELECT * FROM events
+             WHERE calendar_id = ? AND uid = ? AND parent_id IS NULL
+             """,
+            (calendar, uid),
+        ).fetchone()
+        return None if row is None else self._event_from_row(row)
+
+    def get_override(self, parent_id: str, recurrence_key: str) -> Event | None:
+        """Return one override by the original occurrence key, including tombstones."""
+        row = self._connection.execute(
+            """
+            SELECT * FROM events
+             WHERE parent_id = ? AND recurrence_key = ?
+             """,
+            (parent_id, recurrence_key),
+        ).fetchone()
+        return None if row is None else self._event_from_row(row)
 
     # --------------------------------------------------------------- calendars
 
