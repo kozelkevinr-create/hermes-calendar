@@ -39,14 +39,14 @@ contract are called out explicitly.
 ## 1. Sources and how they were gathered
 
 Hermes is installed on the `docker-host` machine and its CLI is an SSH wrapper
-(`/home/spaulding/.local/bin/hermes` runs `ssh docker-host ...`), so library sources
+(`/home/<user>/.local/bin/hermes` runs `ssh docker-host ...`), so library sources
 were read over SSH.
 
 Files read:
 
 | Path (on `docker-host`) | Used for |
 |---|---|
-| `~/.hermes/plugins/orca-status/plugin.yaml` | Real minimal manifest (also present locally at `/home/spaulding/.hermes/plugins/orca-status/`) |
+| `~/.hermes/plugins/orca-status/plugin.yaml` | Real minimal manifest (also present locally at `/home/<user>/.hermes/plugins/orca-status/`) |
 | `~/.hermes/plugins/orca-status/__init__.py` | Real register-only plugin, hook payload shaping |
 | `~/.hermes/hermes-agent/website/docs/developer-guide/plugins/index.md` | Canonical authoring guide (2,619 lines) |
 | `~/.hermes/hermes-agent/plugins/AGENTS.md` | Plugin kinds, discovery systems, compat contract, host boundary |
