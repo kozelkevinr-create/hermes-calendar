@@ -12,7 +12,8 @@ from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from hermes_calendar.ics._common import (
+from ..models import Attendee, EventDraft, Reminder
+from ._common import (
     PRODID,
     clean_line_value,
     escape_text,
@@ -21,7 +22,6 @@ from hermes_calendar.ics._common import (
     format_local,
     format_utc,
 )
-from hermes_calendar.models import Attendee, EventDraft, Reminder
 
 _DEFAULT_ROLE = "REQ-PARTICIPANT"
 _DEFAULT_PARTSTAT = "NEEDS-ACTION"
