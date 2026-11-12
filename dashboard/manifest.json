@@ -1,0 +1,14 @@
+{
+  "name": "hermes-calendar",
+  "label": "Calendar",
+  "description": "Local-first calendar: month and agenda views, recurring events, profiles and the shared calendar, ICS import/export.",
+  "icon": "Clock",
+  "version": "0.0.1",
+  "tab": {
+    "path": "/calendar",
+    "position": "after:skills"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}

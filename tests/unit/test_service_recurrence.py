@@ -985,3 +985,110 @@ def test_all_day_series_edits_and_occurrence_overrides(hermes_home: Path) -> Non
         },
     )
     assert bad_status["code"] == "invalid_argument"
+
+
+def test_service_creates_all_day_events_with_exclusive_end_dates(hermes_home: Path) -> None:
+    del hermes_home
+    calendar_id = calendar_for("profile")
+    service = CalendarService()
+
+    created = service.create_event(
+        calendar_id=calendar_id,
+        summary="Company holiday",
+        start="2026-03-02",
+        end="2026-03-03",
+        all_day=True,
+    )
+
+    event = created["event"]
+    assert event["all_day"] is True
+    assert event["start"]["date"] == "2026-03-02"
+    assert event["end"]["date"] == "2026-03-03"
+    assert event["duration_seconds"] is None
+    assert event["start"]["utc"] == "2026-03-02T00:00:00Z"
+
+    listed = service.list_events(
+        scope="profile",
+        start="2026-03-01T00:00:00Z",
+        end="2026-04-01T00:00:00Z",
+        calendar_id=calendar_id,
+    )
+    assert listed["count"] == 1
+    assert listed["events"][0]["occurrence_start"]["date"] == "2026-03-02"
+
+
+def test_service_accepts_datetime_input_for_all_day_boundaries(hermes_home: Path) -> None:
+    del hermes_home
+    calendar_id = calendar_for("profile")
+
+    created = CalendarService().create_event(
+        calendar_id=calendar_id,
+        summary="Imported holiday",
+        start="2026-03-02T00:00:00Z",
+        end="20260303",
+        all_day=True,
+    )
+
+    assert created["event"]["start"]["date"] == "2026-03-02"
+    assert created["event"]["end"]["date"] == "2026-03-03"
+
+
+def test_service_creates_recurring_all_day_events(hermes_home: Path) -> None:
+    del hermes_home
+    calendar_id = calendar_for("profile")
+
+    created = CalendarService().create_event(
+        calendar_id=calendar_id,
+        summary="Weekly holiday",
+        start="2026-03-02",
+        end="2026-03-03",
+        all_day=True,
+        rrule="FREQ=WEEKLY;COUNT=3",
+    )
+
+    listed = CalendarService().list_events(
+        scope="profile",
+        start="2026-03-01T00:00:00Z",
+        end="2026-04-01T00:00:00Z",
+        calendar_id=calendar_id,
+    )
+
+    assert created["event"]["all_day"] is True
+    assert listed["count"] == 3
+    assert {item["occurrence_start"]["date"] for item in listed["events"]} == {
+        "2026-03-02",
+        "2026-03-09",
+        "2026-03-16",
+    }
+
+
+def test_all_day_creation_validation(hermes_home: Path) -> None:
+    del hermes_home
+    calendar_id = calendar_for("profile")
+    service = CalendarService()
+
+    def create(**overrides: Any) -> str:
+        arguments: dict[str, Any] = {
+            "calendar_id": calendar_id,
+            "summary": "Holiday",
+            "start": "2026-03-02",
+            "end": "2026-03-03",
+            "all_day": True,
+        }
+        arguments.update(overrides)
+        try:
+            service.create_event(**arguments)
+        except Exception as exc:  # noqa: BLE001 - asserting the public error code
+            return str(getattr(exc, "code", type(exc).__name__))
+        return "ok"
+
+    assert create() == "ok"
+    assert create(end="2026-03-02") == "invalid_argument"
+    assert create(end="2026-03-01") == "invalid_argument"
+    assert create(start="") == "invalid_argument"
+    assert create(start=7) == "invalid_argument"
+    assert create(start="not-a-date") == "invalid_argument"
+    assert create(start="2026-13-45") == "invalid_argument"
+    assert create(all_day="yes") == "invalid_argument"
+    assert create(timezone="Mars/Base") == "invalid_argument"
+    assert create(timezone=5) == "invalid_argument"

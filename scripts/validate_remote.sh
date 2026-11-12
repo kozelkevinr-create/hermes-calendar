@@ -50,8 +50,8 @@ tar -czf - \
     --exclude=docs \
     --exclude=tests \
     --exclude=.venv \
-    --exclude=build \
-    --exclude=dist \
+    --exclude=./build \
+    --exclude=./dist \
     --exclude='*.egg-info' \
     --exclude=__pycache__ \
     --exclude='*.pyc' \

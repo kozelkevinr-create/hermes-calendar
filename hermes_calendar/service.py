@@ -200,33 +200,63 @@ class CalendarService:
         rrule: Any = None,
         rdates: Any = None,
         exdates: Any = None,
+        all_day: Any = None,
     ) -> dict[str, Any]:
-        """Create a timed event, optionally recurring, in an existing calendar."""
+        """Create a timed or all-day event, optionally recurring, in a calendar.
+
+        ``all_day=True`` interprets ``start``/``end`` as ISO dates; the end date
+        is exclusive, matching the stored ``start_date``/``end_date`` columns.
+        """
         resolved = _scope(scope)
         target = _require_str(calendar_id, "calendar_id")
         title = _require_str(summary, "summary")
-        zone = _zone(_timezone_name(timezone))
-        start_time = _parse_time(start, "start", zone)
-        end_time = _parse_time(end, "end", zone)
-        _validate_span(start_time, end_time)
+        is_all_day = _optional_bool(all_day, "all_day", default=False)
         normalized_rule = _normalize_rrule(rrule)
-        draft = EventDraft(
-            calendar_id=target,
-            summary=title,
-            description=_optional_str(description, "description"),
-            location=_optional_str(location, "location"),
-            url=_optional_str(url, "url"),
-            start_utc=start_time.utc,
-            end_utc=end_time.utc,
-            start_local=start_time.local,
-            start_tz=start_time.tz,
-            end_local=end_time.local,
-            end_tz=end_time.tz,
-            duration_seconds=end_time.utc - start_time.utc,
-            rrule=normalized_rule,
-            rdate=_recurrence_values(rdates, "rdates", all_day=False),
-            exdate=_recurrence_values(exdates, "exdates", all_day=False),
-        )
+        if is_all_day:
+            _validated_zone_arg(timezone, "timezone")
+            start_day = _parse_all_day(start, "start")
+            end_day = _parse_all_day(end, "end")
+            if end_day <= start_day:
+                raise InvalidArgument("end must be later than start")
+            start_utc = _midnight_utc(start_day)
+            end_utc = _midnight_utc(end_day)
+            draft = EventDraft(
+                calendar_id=target,
+                summary=title,
+                description=_optional_str(description, "description"),
+                location=_optional_str(location, "location"),
+                url=_optional_str(url, "url"),
+                start_utc=start_utc,
+                end_utc=end_utc,
+                start_date=start_day.isoformat(),
+                end_date=end_day.isoformat(),
+                is_all_day=True,
+                rrule=normalized_rule,
+                rdate=_recurrence_values(rdates, "rdates", all_day=True),
+                exdate=_recurrence_values(exdates, "exdates", all_day=True),
+            )
+        else:
+            zone = _zone(_timezone_name(timezone))
+            start_time = _parse_time(start, "start", zone)
+            end_time = _parse_time(end, "end", zone)
+            _validate_span(start_time, end_time)
+            draft = EventDraft(
+                calendar_id=target,
+                summary=title,
+                description=_optional_str(description, "description"),
+                location=_optional_str(location, "location"),
+                url=_optional_str(url, "url"),
+                start_utc=start_time.utc,
+                end_utc=end_time.utc,
+                start_local=start_time.local,
+                start_tz=start_time.tz,
+                end_local=end_time.local,
+                end_tz=end_time.tz,
+                duration_seconds=end_time.utc - start_time.utc,
+                rrule=normalized_rule,
+                rdate=_recurrence_values(rdates, "rdates", all_day=False),
+                exdate=_recurrence_values(exdates, "exdates", all_day=False),
+            )
         with self._repository(resolved) as repository:
             event = repository.create_event(draft, actor=profile_name())
         return {"scope": resolved, "event": _event_payload(event)}
@@ -798,6 +828,25 @@ def _parse_time(value: Any, field: str, zone: ZoneInfo) -> _TimeValue:
     )
 
 
+def _parse_all_day(value: Any, field: str) -> date:
+    """Parse an ISO date (or datetime) for an all-day event boundary."""
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidArgument(
+            f"{field} is required and must be an ISO date, for example 2026-03-02"
+        )
+    try:
+        return date.fromisoformat(_normalize_recurrence_value(value, all_day=True))
+    except (InvalidArgument, ValueError) as exc:
+        raise InvalidArgument(
+            f"{field} must be an ISO date, for example 2026-03-02; got {value!r}"
+        ) from exc
+
+
+def _midnight_utc(day: date) -> int:
+    """Epoch seconds for the UTC midnight that anchors an all-day row."""
+    return int(datetime.combine(day, time.min, tzinfo=UTC).timestamp())
+
+
 def _time_from_utc(epoch: int, zone: ZoneInfo) -> _TimeValue:
     local = datetime.fromtimestamp(epoch, zone)
     return _TimeValue(utc=epoch, local=local.strftime(_LOCAL_FORMAT), tz=zone.key)
@@ -1102,6 +1151,8 @@ def _occurrence_payload(
             "duration_seconds": None if occurrence.is_all_day else end_utc - start_utc,
             "all_day": occurrence.is_all_day,
             "master_id": master.id,
+            "master_rev": master.rev,
+            "master_rrule": master.rrule,
             "is_override": override is not None,
             "override_event_id": override.id if override is not None else None,
             "occurrence_start": start_payload,
@@ -1119,6 +1170,8 @@ def _event_payload_with_own_occurrence(event: Event) -> dict[str, Any]:
     payload.update(
         {
             "master_id": event.id,
+            "master_rev": event.rev,
+            "master_rrule": event.rrule,
             "is_override": False,
             "override_event_id": None,
             "occurrence_start": payload["start"],

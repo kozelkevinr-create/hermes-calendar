@@ -1,0 +1,353 @@
+/* Hand-written dashboard styles. No build step; theme-aware via --color-* vars. */
+
+.hc-root {
+  --hc-border: var(--color-border, rgba(127, 127, 127, 0.35));
+  --hc-card: var(--color-card, rgba(127, 127, 127, 0.08));
+  --hc-text: var(--color-card-foreground, currentColor);
+  --hc-muted: var(--color-muted-foreground, rgba(127, 127, 127, 0.9));
+  --hc-accent: var(--color-primary, #5b7cfa);
+  --hc-danger: var(--color-destructive, #c0392b);
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  color: var(--hc-text);
+  padding: 0.25rem 0 1.25rem;
+}
+
+.hc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.hc-title {
+  font-size: 1.35rem;
+  font-weight: 650;
+  margin: 0;
+}
+
+.hc-scope-switch,
+.hc-toolbar-group,
+.hc-controls-actions,
+.hc-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.hc-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  border: 1px solid var(--hc-border);
+  border-radius: 0.6rem;
+  padding: 0.5rem;
+  background: color-mix(in srgb, var(--hc-card) 70%, transparent);
+}
+
+.hc-period {
+  font-weight: 600;
+  text-align: center;
+  min-width: 10rem;
+}
+
+.hc-controls {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.hc-controls .hc-field {
+  min-width: 15rem;
+}
+
+.hc-controls-actions {
+  align-items: center;
+}
+
+.hc-button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--hc-border);
+  border-radius: 0.45rem;
+  padding: 0.38rem 0.7rem;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.hc-button:hover:not(:disabled) {
+  border-color: var(--hc-accent);
+}
+
+.hc-button:focus-visible,
+.hc-input:focus-visible,
+.hc-event:focus-visible,
+.hc-more:focus-visible {
+  outline: 2px solid var(--hc-accent);
+  outline-offset: 2px;
+}
+
+.hc-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.hc-button.hc-active {
+  border-color: var(--hc-accent);
+  background: color-mix(in srgb, var(--hc-accent) 16%, transparent);
+}
+
+.hc-button.hc-primary {
+  border-color: var(--hc-accent);
+  background: color-mix(in srgb, var(--hc-accent) 22%, transparent);
+  font-weight: 600;
+}
+
+.hc-button.hc-danger {
+  border-color: var(--hc-danger);
+  color: var(--hc-danger);
+}
+
+.hc-timezone-note,
+.hc-hint {
+  color: var(--hc-muted);
+  font-size: 0.82rem;
+  margin: 0;
+}
+
+.hc-status {
+  margin: 0;
+  padding: 0.45rem 0.65rem;
+  border-radius: 0.45rem;
+  border: 1px solid var(--hc-border);
+}
+
+.hc-status-ok {
+  border-color: var(--hc-accent);
+}
+
+.hc-status-error {
+  border-color: var(--hc-danger);
+  color: var(--hc-danger);
+}
+
+.hc-card {
+  border: 1px solid var(--hc-border);
+  border-radius: 0.7rem;
+  padding: 0.85rem;
+  background: var(--hc-card);
+}
+
+.hc-card-title {
+  margin: 0 0 0.6rem;
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+.hc-form,
+.hc-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.hc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.hc-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.hc-input {
+  font: inherit;
+  color: inherit;
+  background: color-mix(in srgb, var(--hc-card) 55%, transparent);
+  border: 1px solid var(--hc-border);
+  border-radius: 0.45rem;
+  padding: 0.4rem 0.5rem;
+  min-width: 0;
+}
+
+.hc-textarea {
+  resize: vertical;
+  min-height: 4.5rem;
+}
+
+.hc-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.6rem;
+}
+
+.hc-check {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.hc-check input {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.hc-hidden-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.hc-month {
+  border: 1px solid var(--hc-border);
+  border-radius: 0.7rem;
+  overflow: hidden;
+}
+
+.hc-weekdays,
+.hc-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.hc-weekday {
+  padding: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--hc-muted);
+  text-align: center;
+  border-bottom: 1px solid var(--hc-border);
+}
+
+.hc-day {
+  min-height: 6.25rem;
+  padding: 0.3rem;
+  border-right: 1px solid var(--hc-border);
+  border-bottom: 1px solid var(--hc-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.hc-day:nth-child(7n) {
+  border-right: none;
+}
+
+.hc-day-outside {
+  opacity: 0.55;
+}
+
+.hc-day-today {
+  background: color-mix(in srgb, var(--hc-accent) 10%, transparent);
+}
+
+.hc-day-number {
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--hc-muted);
+}
+
+.hc-day-events {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.hc-event {
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: color-mix(in srgb, var(--hc-accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--hc-accent) 45%, var(--hc-border));
+  border-radius: 0.35rem;
+  padding: 0.2rem 0.3rem;
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.hc-event-allday {
+  background: color-mix(in srgb, var(--hc-accent) 8%, transparent);
+}
+
+.hc-event-time {
+  font-size: 0.7rem;
+  color: var(--hc-muted);
+  flex: none;
+}
+
+.hc-event-title {
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hc-more {
+  font: inherit;
+  font-size: 0.72rem;
+  color: var(--hc-muted);
+  background: transparent;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.hc-agenda {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.hc-agenda-day {
+  border: 1px solid var(--hc-border);
+  border-radius: 0.6rem;
+  padding: 0.6rem;
+  background: var(--hc-card);
+}
+
+.hc-agenda-heading {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+}
+
+.hc-agenda-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.hc-slot {
+  border-style: dashed;
+}
+
+@media (max-width: 640px) {
+  .hc-day {
+    min-height: 4.5rem;
+  }
+
+  .hc-event-time {
+    display: none;
+  }
+}
