@@ -21,6 +21,7 @@ response fields and must not treat a missing optional field as an error.
 | GET | `/calendars` | List calendars in one store. |
 | POST | `/calendar` | Create one calendar (singular path). |
 | GET | `/events` | List events and expanded occurrences in a window. |
+| GET | `/events/{event_id}` | Re-read one event or one expanded occurrence. |
 | POST | `/events` | Create a timed, all-day, or recurring event. |
 | PATCH | `/events/{event_id}` | Update a series, event, or one occurrence. |
 | DELETE | `/events/{event_id}` | Soft-delete a series, event, or one occurrence. |
@@ -244,8 +245,10 @@ A stale value returns **HTTP 409** with:
 
 Recovery is read-modify-write: re-read the event or occurrence list to get the current
 `rev`/`master_rev`, merge the user's intended change again, then retry with the new value.
-Do not retry the same stale body blindly. The event id is returned so the client can
-refetch precisely that row. A successful update increments `rev` by one.
+`GET /events/{event_id}` re-reads exactly the id the 409 body returned; for an occurrence,
+pass its original `occurrence_start` to get the occurrence shape and current
+`master_rev`. Do not retry the same stale body blindly. The event id is returned so the
+client can refetch precisely that row. A successful update increments `rev` by one.
 
 ## Recurrence
 
@@ -738,6 +741,180 @@ HTTP 200
   "recurrence_expanded": false,
   "scope": "profile"
 }
+
+### `GET /events/{event_id}`
+
+Re-read one event, or one occurrence of a recurring series. This is the targeted re-read
+after a `PATCH`/`DELETE` returns `revision_conflict`: that 409 body already carries
+`event_id`, so the client can fetch exactly that row instead of listing a window.
+
+Path `event_id` is required and at most 128 characters. Ids are opaque strings; an over-long
+value or a path segment that is only whitespace returns `invalid_argument` (HTTP 400), not
+`not_found`.
+
+| Query | Required | Notes |
+|---|---|---|
+| `scope` | no | `profile` (default) or `global`; must be the store that owns the event. |
+| `occurrence_start` | no | One occurrence of a recurring series. Send the occurrence's **original** start: `occurrence_start.local` from `GET /events` for a timed occurrence, or `occurrence_start.date` for an all-day occurrence; max 64 characters. |
+
+Without `occurrence_start` the response `event` is exactly the stored event shape returned
+by `POST /events` and `PATCH /events/{event_id}`: `rev`, the recurrence fields, times as
+`{utc, local, tz, date}`, and all-day values as dates with an exclusive end.
+
+With `occurrence_start` the response `event` is exactly one item from `GET /events`,
+including `master_id`, `master_rev` (use this as `expected_rev` on retry), `master_rrule`,
+`is_override`, `override_event_id`, `occurrence_start`/`occurrence_end`,
+`occurrence_start_utc`/`occurrence_end_utc`, and `recurrence_key`. A start that is not an
+occurrence of the series returns `invalid_argument` (HTTP 400).
+
+A deleted (tombstone) event and an unknown id both return `not_found` (HTTP 404). The event
+must live in the selected store: a profile id read with `scope=global` (or the reverse) is
+`not_found`.
+
+GET /api/plugins/hermes-calendar/events/01a1d127-b515-7b6d-946b-1228d49d7e78
+HTTP 200
+{
+  "event": {
+    "all_day": false,
+    "calendar_id": "cal_01a1d127-b504-7ff8-93fd-a3bd8cebdda6",
+    "categories": [],
+    "classification": "PUBLIC",
+    "created_utc": 1794510402,
+    "deleted_utc": null,
+    "description": "Bring the schema draft.",
+    "duration_seconds": 3600,
+    "end": {
+      "date": null,
+      "local": "2026-03-02T10:00:00",
+      "tz": "America/New_York",
+      "utc": "2026-03-02T15:00:00Z"
+    },
+    "end_utc": 1772463600,
+    "exdate": null,
+    "floating": false,
+    "id": "01a1d127-b515-7b6d-946b-1228d49d7e78",
+    "location": "Room 4B",
+    "owner_profile_id": "alice",
+    "parent_id": null,
+    "rdate": null,
+    "recurrence_id_raw": null,
+    "recurrence_key": null,
+    "recurrence_range": null,
+    "rev": 1,
+    "rrule": null,
+    "rrule_unsupported": null,
+    "scope": "profile",
+    "sequence": 0,
+    "start": {
+      "date": null,
+      "local": "2026-03-02T09:00:00",
+      "tz": "America/New_York",
+      "utc": "2026-03-02T14:00:00Z"
+    },
+    "start_utc": 1772460000,
+    "status": "CONFIRMED",
+    "summary": "Design review",
+    "transparency": "OPAQUE",
+    "uid": "01a1d127-b515-7be6-a282-11a08ef0c1a2@hermes.local",
+    "updated_utc": 1794510402,
+    "url": null
+  },
+  "ok": true,
+  "scope": "profile"
+}
+
+GET /api/plugins/hermes-calendar/events/01a1d127-b522-77bb-bf11-cdaa43bb4781?occurrence_start=2026-03-09T09:00:00
+HTTP 200
+{
+  "event": {
+    "all_day": false,
+    "calendar_id": "cal_01a1d127-b504-7ff8-93fd-a3bd8cebdda6",
+    "categories": [],
+    "classification": "PUBLIC",
+    "created_utc": 1794510402,
+    "deleted_utc": null,
+    "description": null,
+    "duration_seconds": 1800,
+    "end": {
+      "date": null,
+      "local": "2026-03-09T09:30:00",
+      "tz": "America/New_York",
+      "utc": "2026-03-09T13:30:00Z"
+    },
+    "end_utc": 1773063000,
+    "exdate": null,
+    "floating": false,
+    "id": "01a1d127-b522-77bb-bf11-cdaa43bb4781",
+    "is_override": false,
+    "location": null,
+    "master_id": "01a1d127-b522-77bb-bf11-cdaa43bb4781",
+    "master_rev": 1,
+    "master_rrule": "FREQ=WEEKLY;BYDAY=MO;COUNT=3",
+    "occurrence_end": {
+      "date": null,
+      "local": "2026-03-09T09:30:00",
+      "tz": "America/New_York",
+      "utc": "2026-03-09T13:30:00Z"
+    },
+    "occurrence_end_utc": 1773063000,
+    "occurrence_start": {
+      "date": null,
+      "local": "2026-03-09T09:00:00",
+      "tz": "America/New_York",
+      "utc": "2026-03-09T13:00:00Z"
+    },
+    "occurrence_start_utc": 1773061200,
+    "override_event_id": null,
+    "owner_profile_id": "alice",
+    "parent_id": null,
+    "rdate": null,
+    "recurrence_id_raw": null,
+    "recurrence_key": "T:1773061200",
+    "recurrence_range": null,
+    "rev": 1,
+    "rrule": "FREQ=WEEKLY;BYDAY=MO;COUNT=3",
+    "rrule_unsupported": null,
+    "scope": "profile",
+    "sequence": 0,
+    "start": {
+      "date": null,
+      "local": "2026-03-09T09:00:00",
+      "tz": "America/New_York",
+      "utc": "2026-03-09T13:00:00Z"
+    },
+    "start_utc": 1773061200,
+    "status": "CONFIRMED",
+    "summary": "Weekly sync",
+    "transparency": "OPAQUE",
+    "uid": "01a1d127-b522-7fa0-b893-b40a120d7450@hermes.local",
+    "updated_utc": 1794510402,
+    "url": null
+  },
+  "ok": true,
+  "scope": "profile"
+}
+
+HTTP 404 (deleted tombstone or unknown id)
+{
+  "code": "not_found",
+  "error": "01a1d127-b515-7b6d-946b-1228d49d7e78",
+  "error_type": "EventNotFoundError",
+  "ok": false
+}
+
+HTTP 400 (over-long or whitespace-only id, or an `occurrence_start` outside the series)
+{
+  "code": "invalid_argument",
+  "error": "event_id must be at most 128 characters",
+  "ok": false
+}
+
+This route is **additive within `api_version` 1**. Older servers do not have it and answer
+the URL with a routing-level 404 that is **not** this envelope; because additive routes do
+not change `api_version`, a client cannot detect support from `GET /version`. Treat a
+response without the plugin envelope as "route unavailable" and fall back to `GET /events`
+over a window around the event, matching `id` (or `master_id` plus `occurrence_start`). Only
+an HTTP 404 whose body has `code: "not_found"` means the event was deleted.
 
 ### `POST /events`
 
@@ -1377,7 +1554,9 @@ HTTP 200
 
 - Treat ids, `uid`, `rev`, `recurrence_key`, and `updated_at` as opaque values, not as
   parseable ids (only `updated_at` is structured).
-- Send `expected_rev` on every PATCH/DELETE and re-read on 409.
+- Send `expected_rev` on every PATCH/DELETE and re-read on 409. `GET /events/{event_id}`
+  reads back exactly the `event_id` from the conflict body; older servers lack that route,
+  so fall back to `GET /events` when the response is not the plugin envelope.
 - Send `timezone` with every timed wall-clock value; do not rely on the server's local
   zone.
 - Use `since` plus `server_time` for polling, and deduplicate by notification id.

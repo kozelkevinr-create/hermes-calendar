@@ -465,6 +465,26 @@ async def list_events(
     return await _run(operation)
 
 
+@router.get("/events/{event_id}")
+async def get_event(
+    event_id: str,
+    scope: str | None = None,
+    occurrence_start: str | None = None,
+) -> JSONResponse:
+    """Return one event, or one occurrence of a recurring series."""
+
+    def operation() -> dict[str, Any]:
+        return _service().get_event(
+            scope=_scope(_query(scope, "scope", max_length=MAX_SCOPE_LENGTH)),
+            event_id=_path_id(event_id),
+            occurrence_start=_query(
+                occurrence_start, "occurrence_start", max_length=MAX_TIME_LENGTH
+            ),
+        )
+
+    return await _run(operation)
+
+
 @router.post("/events")
 async def create_event(request: Request) -> JSONResponse:
     """Create a timed or all-day event."""
