@@ -10,6 +10,7 @@ PACKAGES = [
     "hermes_calendar",
     "hermes_calendar.db",
     "hermes_calendar.hermes",
+    "hermes_calendar.ics",
     "hermes_calendar.models",
     "hermes_calendar.recurrence",
     "hermes_calendar.reminders",
