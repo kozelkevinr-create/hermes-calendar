@@ -32,6 +32,8 @@ TOOL_NAMES = {
     "calendar_update_event",
     "calendar_delete_event",
     "calendar_list_events",
+    "calendar_import_ics",
+    "calendar_export_ics",
 }
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -592,12 +594,12 @@ def test_delete_with_stale_revision_conflicts(hermes_home: Path) -> None:
 # --------------------------------------------------------------------------- list
 
 
-def test_list_events_merges_calendars_and_skips_recurring(hermes_home: Path) -> None:
+def test_list_events_merges_calendars_and_expands_recurring(hermes_home: Path) -> None:
     del hermes_home
     work = create_profile_calendar("Work")
     home = create_profile_calendar("Home")
-    first = create_event(work, summary="Work review")
-    second = create_event(
+    create_event(work, summary="Work review")
+    create_event(
         home,
         summary="Home review",
         start="2026-03-02T08:00:00",
@@ -626,10 +628,19 @@ def test_list_events_merges_calendars_and_skips_recurring(hermes_home: Path) -> 
         {"start": "2026-03-02T00:00:00Z", "end": "2026-03-03T00:00:00Z"},
     )
 
-    assert payload["count"] == 2
-    assert [item["id"] for item in payload["events"]] == [second["id"], first["id"]]
+    assert payload["count"] == 3
+    assert [item["summary"] for item in payload["events"]] == [
+        "Home review",
+        "Work review",
+        "Recurring series",
+    ]
     assert payload["events"][0]["summary"] == "Home review"
-    assert payload["recurrence_expanded"] is False
+    recurring = payload["events"][2]
+    assert recurring["master_id"] == recurring["id"]
+    assert recurring["is_override"] is False
+    assert recurring["occurrence_start"]["utc"] == "2026-03-02T14:00:00Z"
+    assert recurring["recurrence_key"].startswith("T:")
+    assert payload["recurrence_expanded"] is True
 
 
 def test_list_events_filters_one_calendar(hermes_home: Path) -> None:
