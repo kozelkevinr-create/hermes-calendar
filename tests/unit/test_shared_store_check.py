@@ -82,6 +82,21 @@ class _NoJournalRow:
         return None
 
 
+class _FakeTime:
+    """Deterministic clock/sleep pair for exercising the retry budget."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
 class _JournalModeUnknown(_Proxy):
     """Pretend the journal-mode pragma returned no row."""
 
@@ -204,18 +219,94 @@ def test_corrupt_database_is_reported(home: Path) -> None:
     assert "corrupt" in status.detail
 
 
-def test_locked_database_is_reported(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_locked_database_exhausts_retry_budget(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     del home
+    fake = _FakeTime()
 
     def locked(path: Path) -> sqlite3.Connection:
         raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(shared_store_check, "open_db", locked)
 
-    status = check("one")
+    status = check("one", sleep=fake.sleep, clock=fake.clock)
 
     assert status.ok is False
+    assert status.writable is False
     assert "locked" in status.detail
+    assert fake.sleeps
+    assert sum(fake.sleeps) <= shared_store_check._RETRY_BUDGET_S + 1e-9
+
+
+@pytest.mark.parametrize("message", ["database is locked", "database is busy"])
+def test_transient_lock_is_retried_until_success(
+    home: Path, monkeypatch: pytest.MonkeyPatch, message: str
+) -> None:
+    del home
+    remaining_failures = 3
+    sleeps: list[float] = []
+
+    def locked_then_open(path: Path) -> sqlite3.Connection:
+        nonlocal remaining_failures
+        if remaining_failures:
+            remaining_failures -= 1
+            raise sqlite3.OperationalError(message)
+        return open_db(path)
+
+    monkeypatch.setattr(shared_store_check, "open_db", locked_then_open)
+
+    status = check("one", sleep=sleeps.append, clock=lambda: 0.0)
+
+    assert status.ok is True
+    assert status.writable is True
+    assert len(sleeps) == 3
+    assert sleeps == sorted(sleeps)
+
+
+def test_registration_lock_is_retried_after_closing_connection(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del home
+    remaining_lock = 1
+    sleeps: list[float] = []
+
+    class _RegisterLocked(_Proxy):
+        """Raise a transient lock on the first ``BEGIN IMMEDIATE``."""
+
+        def execute(self, sql: str, parameters: Sequence[object] = ()) -> sqlite3.Cursor:
+            nonlocal remaining_lock
+            if sql == "BEGIN IMMEDIATE" and remaining_lock:
+                remaining_lock -= 1
+                raise sqlite3.OperationalError("database is locked")
+            return super().execute(sql, parameters)
+
+    def open_proxy(path: Path) -> sqlite3.Connection:
+        return cast(sqlite3.Connection, _RegisterLocked(open_db(path)))
+
+    monkeypatch.setattr(shared_store_check, "open_db", open_proxy)
+
+    status = check("one", sleep=sleeps.append, clock=lambda: 0.0)
+
+    assert status.ok is True
+    assert status.writable is True
+    assert len(sleeps) == 1
+
+
+def test_non_lock_operational_error_is_not_retried(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del home
+    sleeps: list[float] = []
+
+    def failing(path: Path) -> sqlite3.Connection:
+        raise sqlite3.OperationalError("no such table: shared_sentinel")
+
+    monkeypatch.setattr(shared_store_check, "open_db", failing)
+
+    status = check("one", sleep=sleeps.append)
+
+    assert status.ok is False
+    assert sleeps == []
+    assert "unreadable or corrupt" in status.detail
 
 
 def test_io_error_is_reported(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -397,23 +488,48 @@ def test_wait_sees_a_concurrent_registration(home: Path) -> None:
     assert status.peers_seen == ("late",)
 
 
-def test_concurrent_profiles_never_raise(home: Path) -> None:
+def test_concurrent_profiles_never_raise(
+    home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     del home
     profile_ids = [f"worker-{index}" for index in range(4)]
+    failures: list[str] = []
+    passed = 0
 
-    with ThreadPoolExecutor(max_workers=len(profile_ids)) as pool:
-        results = list(pool.map(lambda profile_id: check(profile_id, wait_s=2.0), profile_ids))
+    for iteration in range(50):
+        monkeypatch.setenv(
+            "HERMES_HOME",
+            str(tmp_path / f"run-{iteration}" / "profiles" / "one"),
+        )
+        barrier = threading.Barrier(len(profile_ids))
 
-    assert all(result.ok and result.writable for result in results)
-    assert all(
-        profile_id not in result.peers_seen
-        for profile_id, result in zip(profile_ids, results, strict=True)
-    )
-    assert any(result.shared is True for result in results)
+        def probe(profile_id: str, barrier: threading.Barrier = barrier) -> SharedStoreStatus:
+            barrier.wait(timeout=10.0)
+            return check(profile_id, wait_s=2.0, sleep=lambda _seconds: None)
 
-    final = check("observer")
-    assert final.shared is True
-    assert set(final.peers_seen) == set(profile_ids)
+        with ThreadPoolExecutor(max_workers=len(profile_ids)) as pool:
+            results = list(pool.map(probe, profile_ids))
+
+        iteration_failures: list[str] = []
+        for profile_id, result in zip(profile_ids, results, strict=True):
+            if not result.ok or not result.writable:
+                iteration_failures.append(
+                    f"iteration {iteration}, {profile_id}: ok={result.ok} "
+                    f"writable={result.writable}: {result.detail}"
+                )
+            if profile_id in result.peers_seen:
+                iteration_failures.append(
+                    f"iteration {iteration}, {profile_id}: saw its own sentinel"
+                )
+        if not any(result.shared is True for result in results):
+            iteration_failures.append(f"iteration {iteration}: no profile saw a peer")
+
+        if iteration_failures:
+            failures.extend(iteration_failures)
+        else:
+            passed += 1
+
+    assert passed == 50, failures
 
 
 # ------------------------------------------------------------------- integration
