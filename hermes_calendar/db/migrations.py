@@ -8,8 +8,13 @@ global store safely (``core.md`` §5.9).
 
 Migrations are per store. Opening a store whose version is newer than this build
 is refused rather than silently downgraded. Versions are additive: a v1 store
-upgrades in place by applying v2, and a fresh store applies v1 then v2 inside the
-same write transaction.
+upgrades in place by applying v2 and v3, and a fresh store applies v1, v2, and v3
+inside the same write transaction.
+
+V3 seeds one default ``Personal`` calendar into a profile store that has never
+had any calendar. The insert is attributed to ``origin='system'`` so it is never
+offered to a remote provider, yet it still produces the ordinary calendar
+change-log row (``core.md`` §7.3) for local refresh handling.
 """
 
 from __future__ import annotations
@@ -18,16 +23,19 @@ import sqlite3
 import time
 from typing import Literal
 
+from ..models import new_uuid7
 from .errors import SchemaVersionError, StoreScopeError
 from .schema import V1_STATEMENTS, V2_GLOBAL_STATEMENTS, V2_PROFILE_STATEMENTS
 
 StoreScope = Literal["profile", "global"]
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 V1_SCHEMA_VERSION = 1
+V2_SCHEMA_VERSION = 2
 LOCAL_SOURCE_ID = "src_local"
 GLOBAL_CALENDAR_ID = "cal_global"
 GLOBAL_STORE_ID = "global"
+DEFAULT_PROFILE_CALENDAR_NAME = "Personal"
 
 
 def migrate(
@@ -76,8 +84,10 @@ def migrate(
             )
         else:
             _verify_scope(connection, store_scope)
-        if version < SCHEMA_VERSION:
+        if version < V2_SCHEMA_VERSION:
             _apply_v2(connection, store_scope=store_scope)
+        if version < SCHEMA_VERSION:
+            _apply_v3(connection, store_scope=store_scope)
         connection.execute("COMMIT")
     except BaseException:
         connection.execute("ROLLBACK")
@@ -198,6 +208,74 @@ def _apply_v2(connection: sqlite3.Connection, *, store_scope: StoreScope) -> Non
 
     connection.execute(
         "UPDATE schema_meta SET value = ? WHERE key = 'schema_version'",
+        (str(V2_SCHEMA_VERSION),),
+    )
+    connection.execute(f"PRAGMA user_version = {V2_SCHEMA_VERSION}")
+
+
+def _apply_v3(connection: sqlite3.Connection, *, store_scope: StoreScope) -> None:
+    """Seed one default calendar into a profile store that has no calendars.
+
+    The seed is deliberately data-only and runs exactly once per store: it
+    counts every calendar row, including soft-deleted ones, so a user who
+    removed their calendars is never given one back by a later open. The global
+    store is untouched and keeps exactly its single ``cal_global`` row.
+    """
+    if store_scope == "profile":
+        _seed_default_profile_calendar(connection)
+
+    connection.execute(
+        "UPDATE schema_meta SET value = ? WHERE key = 'schema_version'",
         (str(SCHEMA_VERSION),),
     )
     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _seed_default_profile_calendar(connection: sqlite3.Connection) -> None:
+    """Insert the default calendar through the normal change-log path."""
+    if connection.execute("SELECT 1 FROM calendars LIMIT 1").fetchone() is not None:
+        return
+
+    owner_row = connection.execute(
+        "SELECT owner_profile_id FROM sources WHERE id = ?", (LOCAL_SOURCE_ID,)
+    ).fetchone()
+    if owner_row is None or owner_row["owner_profile_id"] is None:
+        # A v1/v2 profile store always seeds ``src_local`` with an owner. If an
+        # externally modified store lacks it, leave the store without a
+        # calendar rather than inventing a foreign key target.
+        return
+
+    now = int(time.time())
+    connection.execute(
+        """
+        UPDATE change_context
+           SET origin = 'system', actor = NULL, batch_id = 'migration:v3',
+               suppress = 0
+         WHERE id = 1
+        """
+    )
+    # ``default_tz`` is omitted on purpose: the column default keeps the seed
+    # zone-neutral so the normal timezone resolution order applies at read time.
+    connection.execute(
+        """
+        INSERT INTO calendars
+          (id, source_id, scope, owner_profile_id, name, description, color,
+           read_only, created_utc, updated_utc)
+        VALUES (?, ?, 'profile', ?, ?, NULL, NULL, 0, ?, ?)
+        """,
+        (
+            f"cal_{new_uuid7()}",
+            LOCAL_SOURCE_ID,
+            str(owner_row["owner_profile_id"]),
+            DEFAULT_PROFILE_CALENDAR_NAME,
+            now,
+            now,
+        ),
+    )
+    connection.execute(
+        """
+        UPDATE change_context
+           SET origin = 'local', actor = NULL, batch_id = NULL
+         WHERE id = 1
+        """
+    )

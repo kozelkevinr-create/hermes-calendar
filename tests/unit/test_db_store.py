@@ -42,6 +42,21 @@ def test_open_profile_store_uses_the_active_profile(
         connection.close()
 
 
+def test_reopening_a_profile_store_keeps_one_default_calendar(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "root" / "profiles" / "coding"
+    monkeypatch.setenv("HERMES_HOME", str(home))
+
+    for _ in range(2):
+        connection = open_profile_store()
+        try:
+            rows = connection.execute("SELECT name FROM calendars").fetchall()
+            assert [str(row["name"]) for row in rows] == ["Personal"]
+        finally:
+            connection.close()
+
+
 def test_open_global_store_uses_the_shared_root(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -123,11 +123,17 @@ def test_manifest_declares_every_tool() -> None:
 # ----------------------------------------------------------------------- calendars
 
 
-def test_profile_starts_with_no_calendars(hermes_home: Path) -> None:
+def test_profile_starts_with_one_default_calendar(hermes_home: Path) -> None:
     del hermes_home
     payload = call(tools.calendar_list_calendars)
 
-    assert payload == {"ok": True, "scope": "profile", "count": 0, "calendars": []}
+    assert payload["ok"] is True
+    assert payload["scope"] == "profile"
+    assert payload["count"] == 1
+    calendar = payload["calendars"][0]
+    assert calendar["name"] == "Personal"
+    assert calendar["source_id"] == "src_local"
+    assert calendar["read_only"] is False
 
 
 def test_create_and_list_profile_calendar(hermes_home: Path) -> None:
@@ -153,8 +159,9 @@ def test_create_and_list_profile_calendar(hermes_home: Path) -> None:
     assert calendar["scope"] == "profile"
 
     listed = call(tools.calendar_list_calendars, {"scope": "profile"})
-    assert listed["count"] == 1
-    assert listed["calendars"][0]["id"] == calendar["id"]
+    assert listed["count"] == 2
+    assert [item["name"] for item in listed["calendars"]] == ["Personal", "Work"]
+    assert listed["calendars"][1]["id"] == calendar["id"]
 
 
 def test_calendar_defaults_to_profile_timezone(

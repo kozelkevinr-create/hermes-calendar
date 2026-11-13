@@ -420,7 +420,8 @@ def test_service_opens_the_default_profile_and_global_stores(hermes_home: Path) 
     global_store = service.list_calendars(scope="global")
 
     assert profile["scope"] == "profile"
-    assert profile["count"] == 0
+    assert profile["count"] == 1
+    assert profile["calendars"][0]["name"] == "Personal"
     assert global_store["scope"] == "global"
     assert global_store["calendars"][0]["id"] == "cal_global"
 

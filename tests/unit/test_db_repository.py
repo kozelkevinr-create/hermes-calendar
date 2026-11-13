@@ -93,8 +93,18 @@ def test_create_calendar_and_list_calendars(repository: Repository) -> None:
     assert work.read_only is True
     assert work.remote_id == "remote-work"
     assert home.read_only is False
-    assert [calendar.name for calendar in repository.list_calendars()] == ["Home", "Work"]
-    assert [row["entity_type"] for row in _logs(repository)] == ["calendar", "calendar"]
+    assert [calendar.name for calendar in repository.list_calendars()] == [
+        "Home",
+        "Personal",
+        "Work",
+    ]
+    # The v3 seed is the first log row; the two explicit creates follow it.
+    assert [row["entity_type"] for row in _logs(repository)] == [
+        "calendar",
+        "calendar",
+        "calendar",
+    ]
+    assert [row["origin"] for row in _logs(repository)] == ["system", "local", "local"]
 
 
 def test_create_calendar_with_explicit_source_and_id(repository: Repository) -> None:
@@ -492,7 +502,10 @@ def test_list_calendars_excludes_deleted(repository: Repository) -> None:
         "UPDATE calendars SET deleted_utc = created_utc WHERE id = ?", (work.id,)
     )
 
-    assert [calendar.name for calendar in repository.list_calendars()] == ["Home"]
+    assert [calendar.name for calendar in repository.list_calendars()] == [
+        "Home",
+        "Personal",
+    ]
 
 
 def test_writes_set_change_context(repository: Repository) -> None:

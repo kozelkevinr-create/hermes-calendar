@@ -800,7 +800,12 @@ whose columns match each FK target exactly.
 The store initializer sets `store_scope`, `store_id`, and (for a profile store)
 `owner_profile_id` before inserting any calendar; the global store sets the owner key
 to an empty string. The global store seeds exactly one calendar with
-`scope = 'global'`. `sources.kind = 'local'` is the plugin's own data; the other kinds
+`scope = 'global'`. A profile store is seeded with exactly one local `Personal`
+calendar (schema v3) when it has never held any calendar, including deleted rows, so a
+client that can add events but cannot create calendars has somewhere to write; the seed
+is logged as a `system` change and is never pushed to a remote provider. A profile that
+already has a calendar, or has deliberately deleted its only calendar, gets nothing
+back. `sources.kind = 'local'` is the plugin's own data; the other kinds
 are external sync peers. There is no `'hermes'` kind because Hermes does not expose a
 remote calendar API.
 
@@ -1651,6 +1656,11 @@ event_instances ...)`; correctness does not depend on the optimization.
   write `origin='system'` log rows; either way the UI must be told to refresh.
   Preferred: bump `rev`, let triggers log origin `system`, and let the app treat
   `system` changes as refresh-only.
+- Schema v3 is data-only: it inserts the default `Personal` calendar into a profile
+  store whose `calendars` table is still empty (counting tombstones), through the
+  normal change-capture path with `origin='system'`, so the row is logged as
+  refresh-only and excluded from `pending_push`. Because migrations run once per
+  store, later user deletions are never undone and the global store is untouched.
 - Never rewrite `etag` during migration unless the peer version changed; doing so
   would cause spurious `If-Match` failures.
 - Migrations must never copy rows between the profile and global stores implicitly.
