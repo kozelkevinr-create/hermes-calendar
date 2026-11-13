@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..plugin_storage import global_dir, profile_dir
 from ..plugin_storage import open_db as open_db
+from ..profile_identity import current_profile_id
 from .migrations import (
     GLOBAL_STORE_ID,
     StoreScope,
@@ -28,8 +29,13 @@ _OPEN_RETRY_DELAY_SECONDS = 0.05
 
 
 def profile_name() -> str:
-    """Return the active profile identity (its directory name)."""
-    return profile_dir(PLUGIN_NAME).parent.parent.name
+    """Return the active Hermes profile id (``default``, a name, or ``custom``).
+
+    Kept as a stable name for existing callers; the value comes from
+    :func:`hermes_calendar.profile_identity.current_profile_id`, never from the
+    plugin-data directory basename.
+    """
+    return current_profile_id()
 
 
 def open_profile_store() -> sqlite3.Connection:

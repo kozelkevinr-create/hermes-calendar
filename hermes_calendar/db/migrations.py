@@ -15,27 +15,44 @@ V3 seeds one default ``Personal`` calendar into a profile store that has never
 had any calendar. The insert is attributed to ``origin='system'`` so it is never
 offered to a remote provider, yet it still produces the ordinary calendar
 change-log row (``core.md`` §7.3) for local refresh handling.
+
+V4 repairs the profile id written by the old directory-basename derivation. A
+default-profile store may hold ``.hermes`` in its ``schema_meta`` identity and
+in every owner/actor column; v4 rewrites exactly that value to ``default`` after
+taking a private backup. It never creates a change-log row: the rewrite runs
+with change capture suppressed and leaves ``pending_push`` untouched. Stores
+with no legacy rows (including fresh stores) are upgraded without a backup.
 """
 
 from __future__ import annotations
 
+import contextlib
+import os
+import re
 import sqlite3
 import time
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 from ..models import new_uuid7
-from .errors import SchemaVersionError, StoreScopeError
+from .errors import MigrationError, SchemaVersionError, StoreScopeError
 from .schema import V1_STATEMENTS, V2_GLOBAL_STATEMENTS, V2_PROFILE_STATEMENTS
 
 StoreScope = Literal["profile", "global"]
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 V1_SCHEMA_VERSION = 1
 V2_SCHEMA_VERSION = 2
+V3_SCHEMA_VERSION = 3
+V4_SCHEMA_VERSION = 4
 LOCAL_SOURCE_ID = "src_local"
 GLOBAL_CALENDAR_ID = "cal_global"
 GLOBAL_STORE_ID = "global"
 DEFAULT_PROFILE_CALENDAR_NAME = "Personal"
+LEGACY_PROFILE_ID = ".hermes"
+DEFAULT_PROFILE_ID = "default"
+_IDENTITY_COLUMN_RE = re.compile(r"profile|actor|creator", re.IGNORECASE)
 
 
 def migrate(
@@ -86,8 +103,10 @@ def migrate(
             _verify_scope(connection, store_scope)
         if version < V2_SCHEMA_VERSION:
             _apply_v2(connection, store_scope=store_scope)
-        if version < SCHEMA_VERSION:
+        if version < V3_SCHEMA_VERSION:
             _apply_v3(connection, store_scope=store_scope)
+        if version < V4_SCHEMA_VERSION:
+            _apply_v4(connection, store_scope=store_scope)
         connection.execute("COMMIT")
     except BaseException:
         connection.execute("ROLLBACK")
@@ -226,9 +245,9 @@ def _apply_v3(connection: sqlite3.Connection, *, store_scope: StoreScope) -> Non
 
     connection.execute(
         "UPDATE schema_meta SET value = ? WHERE key = 'schema_version'",
-        (str(SCHEMA_VERSION),),
+        (str(V3_SCHEMA_VERSION),),
     )
-    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    connection.execute(f"PRAGMA user_version = {V3_SCHEMA_VERSION}")
 
 
 def _seed_default_profile_calendar(connection: sqlite3.Connection) -> None:
@@ -279,3 +298,186 @@ def _seed_default_profile_calendar(connection: sqlite3.Connection) -> None:
          WHERE id = 1
         """
     )
+
+
+def _apply_v4(connection: sqlite3.Connection, *, store_scope: StoreScope) -> None:
+    """Repair the legacy ``.hermes`` profile identity in a profile store.
+
+    The global store has no profile identity to repair (its ``owner_profile_id``
+    values are ``NULL`` and its co-ordination rows are written by the current
+    code path, which now supplies a valid id), so only the version is bumped.
+    """
+    if store_scope == "profile":
+        _rewrite_legacy_profile_identity(connection)
+
+    connection.execute(
+        "UPDATE schema_meta SET value = ? WHERE key = 'schema_version'",
+        (str(V4_SCHEMA_VERSION),),
+    )
+    connection.execute(f"PRAGMA user_version = {V4_SCHEMA_VERSION}")
+
+
+def _rewrite_legacy_profile_identity(connection: sqlite3.Connection) -> None:
+    """Rewrite every exact ``.hermes`` identity value to ``default``.
+
+    The backup is taken only when at least one row actually needs changing, and
+    it is taken before the first write. The rewrite runs inside the caller's
+    ``BEGIN IMMEDIATE`` transaction with ``change_context.suppress = 1`` so no
+    update trigger appends a change-log row; the preceding context row is then
+    restored (with a legacy actor promoted to ``default`` rather than put back).
+    """
+    if _legacy_identity_rows(connection) == 0:
+        return
+
+    _backup_database(connection)
+
+    context = connection.execute(
+        "SELECT origin, actor, batch_id, suppress FROM change_context WHERE id = 1"
+    ).fetchone()
+    columns = _identity_columns(connection)
+
+    connection.execute("UPDATE change_context SET suppress = 1 WHERE id = 1")
+    try:
+        for table, column in columns:
+            connection.execute(
+                f"UPDATE {_quote(table)} SET {_quote(column)} = ? WHERE {_quote(column)} = ?",
+                (DEFAULT_PROFILE_ID, LEGACY_PROFILE_ID),
+            )
+        connection.execute(
+            "UPDATE schema_meta SET value = ? WHERE value = ?",
+            (DEFAULT_PROFILE_ID, LEGACY_PROFILE_ID),
+        )
+        connection.execute(
+            "UPDATE schema_meta SET value = ? WHERE key = 'store_id' AND value = ?",
+            (f"profile:{DEFAULT_PROFILE_ID}", f"profile:{LEGACY_PROFILE_ID}"),
+        )
+    finally:
+        if context is None:  # pragma: no cover - change_context always has row 1
+            connection.execute("UPDATE change_context SET suppress = 0 WHERE id = 1")
+        else:
+            previous_actor = context["actor"]
+            restored_actor = (
+                DEFAULT_PROFILE_ID if previous_actor == LEGACY_PROFILE_ID else previous_actor
+            )
+            connection.execute(
+                """
+                UPDATE change_context
+                   SET origin = ?, actor = ?, batch_id = ?, suppress = ?
+                 WHERE id = 1
+                """,
+                (
+                    context["origin"],
+                    restored_actor,
+                    context["batch_id"],
+                    context["suppress"],
+                ),
+            )
+
+
+def _identity_columns(connection: sqlite3.Connection) -> tuple[tuple[str, str], ...]:
+    """Find every column whose name marks a profile id, actor, or creator.
+
+    The schema is searched rather than hard-coded so a table added later with an
+    owner/actor column is repaired by the same migration. ``schema_meta`` is
+    handled separately because its identity lives in key/value rows.
+    """
+    tables = connection.execute(
+        """
+        SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+         ORDER BY name
+        """
+    ).fetchall()
+    columns: list[tuple[str, str]] = []
+    for table_row in tables:
+        table = str(table_row["name"])
+        for column_row in connection.execute(f"PRAGMA table_info({_quote(table)})"):
+            column = str(column_row["name"])
+            if _IDENTITY_COLUMN_RE.search(column):
+                columns.append((table, column))
+    return tuple(columns)
+
+
+def _legacy_identity_rows(connection: sqlite3.Connection) -> int:
+    """Count rows that :func:`_rewrite_legacy_profile_identity` would change."""
+    total = 0
+    for table, column in _identity_columns(connection):
+        row = connection.execute(
+            f"SELECT count(*) FROM {_quote(table)} WHERE {_quote(column)} = ?",
+            (LEGACY_PROFILE_ID,),
+        ).fetchone()
+        total += int(row[0])
+    total += int(
+        connection.execute(
+            "SELECT count(*) FROM schema_meta WHERE value = ?", (LEGACY_PROFILE_ID,)
+        ).fetchone()[0]
+    )
+    total += int(
+        connection.execute(
+            "SELECT count(*) FROM schema_meta WHERE key = 'store_id' AND value = ?",
+            (f"profile:{LEGACY_PROFILE_ID}",),
+        ).fetchone()[0]
+    )
+    return total
+
+
+def _backup_database(connection: sqlite3.Connection) -> Path:
+    """Write a consistent private backup next to the database file.
+
+    A second connection is used because SQLite's backup API cannot read from the
+    connection that holds the migration's write transaction. No rewrite has
+    happened yet, so that connection sees the pre-migration state.
+
+    The destination is created with ``O_EXCL`` and mode ``0600``; an existing
+    backup is never overwritten. On failure the partial file is removed and
+    :class:`MigrationError` aborts the migration before the transaction commits.
+    """
+    database = _database_path(connection)
+    destination = _backup_path(database)
+    try:
+        descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(descriptor)
+        os.chmod(destination, 0o600)
+        source = sqlite3.connect(str(database), timeout=5)
+        try:
+            source.execute("PRAGMA busy_timeout = 5000")
+            target = sqlite3.connect(str(destination))
+            try:
+                source.backup(target)
+            finally:
+                target.close()
+        finally:
+            source.close()
+    except Exception as exc:
+        with contextlib.suppress(OSError):
+            destination.unlink()
+        raise MigrationError(
+            f"cannot create the pre-v4 backup {destination.name} for {database}: {exc}"
+        ) from exc
+    return destination
+
+
+def _database_path(connection: sqlite3.Connection) -> Path:
+    """Return the file backing the ``main`` database."""
+    for row in connection.execute("PRAGMA database_list"):
+        if str(row["name"]) == "main":
+            raw = str(row["file"])
+            if raw:
+                return Path(raw)
+    raise MigrationError("cannot create a pre-v4 backup for an in-memory store")
+
+
+def _backup_path(database: Path) -> Path:
+    """Return a non-existent ``<db>.pre-v4-<UTC timestamp>.bak`` path."""
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    candidate = database.with_name(f"{database.name}.pre-v4-{stamp}.bak")
+    suffix = 1
+    while candidate.exists():
+        candidate = database.with_name(f"{database.name}.pre-v4-{stamp}-{suffix}.bak")
+        suffix += 1
+    return candidate
+
+
+def _quote(identifier: str) -> str:
+    """Quote a schema identifier for interpolation into DDL/DML."""
+    return '"' + identifier.replace('"', '""') + '"'

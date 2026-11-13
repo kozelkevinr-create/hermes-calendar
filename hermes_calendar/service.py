@@ -37,11 +37,11 @@ from .db import (
     RevisionConflict,
     open_global_store,
     open_profile_store,
-    profile_name,
 )
 from .ics import MAX_ICS_BYTES, IcsLimitError, parse_ics, serialize_events
 from .models import Calendar, Event, EventDraft
 from .plugin_storage import profile_dir
+from .profile_identity import current_profile_id
 from .recurrence import (
     ExpansionLimitExceeded,
     MasterEvent,
@@ -258,7 +258,7 @@ class CalendarService:
                 exdate=_recurrence_values(exdates, "exdates", all_day=False),
             )
         with self._repository(resolved) as repository:
-            event = repository.create_event(draft, actor=profile_name())
+            event = repository.create_event(draft, actor=current_profile_id())
         return {"scope": resolved, "event": _event_payload(event)}
 
     def get_event(
@@ -386,12 +386,12 @@ class CalendarService:
                     repository.delete_event(
                         override.id,
                         expected_rev=None,
-                        actor=profile_name(),
+                        actor=current_profile_id(),
                     )
             repository.delete_event(
                 master.id,
                 expected_rev=revision,
-                actor=profile_name(),
+                actor=current_profile_id(),
             )
             result: dict[str, Any] = {
                 "scope": resolved,
@@ -509,13 +509,15 @@ class CalendarService:
                     warnings = draft_warnings
                     existing = repository.get_event_by_uid(target, prepared.uid or "")
                     if existing is None:
-                        series_master = repository.create_event(prepared, actor=profile_name())
+                        series_master = repository.create_event(
+                            prepared, actor=current_profile_id()
+                        )
                         imported += 1
                     else:
                         series_master = repository.update_event(
                             _apply_draft(existing, prepared),
                             expected_rev=existing.rev,
-                            actor=profile_name(),
+                            actor=current_profile_id(),
                         )
                         updated += 1
                     masters[str(prepared.uid)] = series_master
@@ -539,13 +541,13 @@ class CalendarService:
                     master.id, prepared.recurrence_key or ""
                 )
                 if existing_override is None:
-                    repository.create_event(prepared, actor=profile_name())
+                    repository.create_event(prepared, actor=current_profile_id())
                     imported += 1
                 else:
                     repository.update_event(
                         _apply_draft(existing_override, prepared),
                         expected_rev=existing_override.rev,
-                        actor=profile_name(),
+                        actor=current_profile_id(),
                     )
                     updated += 1
         result: dict[str, Any] = {
@@ -624,7 +626,7 @@ class CalendarService:
         return repository.update_event(
             replace(master, **changes),
             expected_rev=master.rev,
-            actor=profile_name(),
+            actor=current_profile_id(),
         )
 
     def _update_occurrence(
@@ -662,11 +664,11 @@ class CalendarService:
             exdate=None,
         )
         if existing is None:
-            return repository.create_event(draft, actor=profile_name())
+            return repository.create_event(draft, actor=current_profile_id())
         return repository.update_event(
             _apply_draft(existing, draft),
             expected_rev=existing.rev,
-            actor=profile_name(),
+            actor=current_profile_id(),
         )
 
     def _delete_occurrence(
@@ -696,13 +698,13 @@ class CalendarService:
             status="CANCELLED",
         )
         if existing is None:
-            return repository.create_event(draft, actor=profile_name())
+            return repository.create_event(draft, actor=current_profile_id())
         if existing.status == "CANCELLED" and existing.deleted_utc is None:
             return existing
         return repository.update_event(
             _apply_draft(existing, draft),
             expected_rev=existing.rev,
-            actor=profile_name(),
+            actor=current_profile_id(),
         )
 
 

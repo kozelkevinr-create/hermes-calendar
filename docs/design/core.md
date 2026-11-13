@@ -495,8 +495,10 @@ Consequences that must be handled by the plugin, not assumed away:
    under `coding` cannot use the helper to reach `pentest`'s database; it must resolve
    the target profile explicitly (environment or profile-aware helper). Background
    jobs (including the reminder cron) must be started with the intended profile.
-2. Profile identity is the directory name in v1 (`coding`, `local`, `pentest`). A
-   rename would change the identity; see Q20.
+2. Profile identity is the **Hermes profile name**, not the plugin-data directory
+   name: `default` when the active home is the default Hermes root, the `<name>`
+   under `<root>/profiles/<name>`, and `custom` for any other home. A rename
+   would change the identity; see Q20.
 3. The global store has a different lifetime from every profile store. It needs its
    own schema version, backup policy, and ownership rules.
 
@@ -2516,11 +2518,15 @@ fact from the Hermes/plugin API research, then a deployment note. *Blocking for
 shipping the global calendar, not for the profile calendar.*
 
 **Q20. Is profile identity the directory name, and what happens on rename/delete?**
-*Default:* `profile:<directory-name>` (`coding`, `local`, `pentest`); a rename is a
-migration of the profile store's `store_id`/`owner_profile_id`, not a new identity.
-Deleting a profile leaves global rows with a dangling `owner_profile_id`; *open:*
-whether to keep the author label, anonymize it, or offer a transfer. *Risk:* two
-profiles can be renamed into the same name; the store path collision must be rejected.
+*Default:* the Hermes profile name, derived from the active home by
+`hermes_calendar.profile_identity.current_profile_id`: `default` at the default
+root (`~/.hermes`, or a Docker/custom root), `<name>` under
+`<root>/profiles/<name>`, and `custom` for any other path (two unrelated custom
+homes share `custom`). `store_id` is `profile:<id>`; a rename is a migration of
+the profile store's `store_id`/`owner_profile_id`, not a new identity. Deleting a
+profile leaves global rows with a dangling `owner_profile_id`; *open:* whether to
+keep the author label, anonymize it, or offer a transfer. *Risk:* two profiles can
+be renamed into the same name; the store path collision must be rejected.
 
 **Q21. What exactly does "publish to global" mean?**
 *Default:* copy-on-publish: new internal `id`, new UID only if the destination is a

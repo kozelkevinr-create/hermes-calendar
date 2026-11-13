@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import sqlite3
+import stat
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
 import pytest
 
 from hermes_calendar.db import connect, migrations
-from hermes_calendar.db.errors import SchemaVersionError, StoreScopeError
+from hermes_calendar.db.errors import MigrationError, SchemaVersionError, StoreScopeError
 from hermes_calendar.db.migrations import (
     DEFAULT_PROFILE_CALENDAR_NAME,
     GLOBAL_CALENDAR_ID,
@@ -542,3 +544,403 @@ def test_seeded_calendar_supports_events_end_to_end(
     assert events["count"] == 1
     assert events["events"][0]["summary"] == "First event"
     assert events["events"][0]["master_id"] == created["event"]["id"]
+
+
+# --------------------------------------------------------------- v4 repair
+
+
+def _v3_profile_store(
+    path: Path, *, owner: str = ".hermes", legacy_actors: bool = True
+) -> sqlite3.Connection:
+    """Build a committed schema-v3 profile store with realistic row counts."""
+    connection = connect(path)
+    for statement in V1_STATEMENTS:
+        connection.execute(statement)
+    connection.execute("UPDATE change_context SET suppress = 1 WHERE id = 1")
+    connection.executemany(
+        "INSERT INTO schema_meta (key, value) VALUES (?, ?)",
+        (
+            ("schema_version", "3"),
+            ("created_by", "hermes-calendar"),
+            ("min_available_seq", "1"),
+            ("store_scope", "profile"),
+            ("store_id", f"profile:{owner}"),
+            ("owner_profile_id", owner),
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO sources
+          (id, scope, owner_profile_id, kind, display_name,
+           config_json, capabilities_json, created_utc, updated_utc)
+        VALUES (?, 'profile', ?, 'local', 'Local', '{}', '{}', 0, 0)
+        """,
+        (LOCAL_SOURCE_ID, owner),
+    )
+    connection.executemany(
+        """
+        INSERT INTO calendars
+          (id, source_id, scope, owner_profile_id, name, default_tz,
+           read_only, created_utc, updated_utc)
+        VALUES (?, ?, 'profile', ?, ?, 'UTC', 0, 0, 0)
+        """,
+        (
+            ("cal_one", LOCAL_SOURCE_ID, owner, "One"),
+            ("cal_two", LOCAL_SOURCE_ID, owner, "Two"),
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO events
+          (id, calendar_id, source_id, scope, owner_profile_id, uid, summary,
+           start_local, start_tz, start_utc, end_local, end_tz, end_utc,
+           duration_seconds, updated_utc)
+        VALUES (?, ?, ?, 'profile', ?, ?, ?, '2026-01-01T09:00:00', 'UTC', 0,
+                '2026-01-01T10:00:00', 'UTC', 3600, 3600, 0)
+        """,
+        (
+            (f"evt_{index}", "cal_one", LOCAL_SOURCE_ID, owner, f"uid-{index}", f"Event {index}")
+            for index in range(53)
+        ),
+    )
+    for statement in V2_PROFILE_STATEMENTS:
+        connection.execute(statement)
+    change_actor = owner if legacy_actors else "coding"
+    connection.executemany(
+        """
+        INSERT INTO change_log
+          (at_utc, scope, entity_type, entity_id, op, origin, actor, after_json)
+        VALUES (0, 'profile', 'event', ?, 'insert', 'local', ?, '{}')
+        """,
+        ((f"log-{index}", change_actor if index < 53 else "other") for index in range(55)),
+    )
+    connection.execute(
+        """
+        UPDATE change_context
+           SET origin = 'system', actor = ?, batch_id = 'batch-v3', suppress = 0
+         WHERE id = 1
+        """,
+        (owner,),
+    )
+    connection.execute("PRAGMA user_version = 3")
+    return connection
+
+
+def _table_counts(connection: sqlite3.Connection) -> dict[str, int]:
+    tables = [
+        str(row["name"])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )
+    ]
+    return {
+        table: int(connection.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0])
+        for table in tables
+    }
+
+
+def _backups(path: Path) -> list[Path]:
+    return sorted(path.parent.glob(f"{path.name}.pre-v4-*.bak"))
+
+
+def _legacy_count(connection: sqlite3.Connection, table: str, column: str) -> int:
+    row = connection.execute(
+        f'SELECT count(*) FROM "{table}" WHERE "{column}" = ?', (".hermes",)
+    ).fetchone()
+    return int(row[0])
+
+
+def test_v4_repairs_every_legacy_profile_id(tmp_path: Path) -> None:
+    path = tmp_path / "calendar.db"
+    connection = _v3_profile_store(path)
+    try:
+        before = _table_counts(connection)
+        pending_before = int(connection.execute("SELECT count(*) FROM pending_push").fetchone()[0])
+        logs_before = int(connection.execute("SELECT count(*) FROM change_log").fetchone()[0])
+        assert logs_before == 55
+        assert pending_before == 55
+
+        version = migrate(
+            connection,
+            store_scope="profile",
+            store_id="profile:default",
+            owner_profile_id="default",
+        )
+
+        assert version == SCHEMA_VERSION == 4
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert _table_counts(connection) == before
+        assert int(connection.execute("SELECT count(*) FROM change_log").fetchone()[0]) == 55
+        assert int(connection.execute("SELECT count(*) FROM pending_push").fetchone()[0]) == (
+            pending_before
+        )
+
+        meta = _meta(connection)
+        assert meta["schema_version"] == "4"
+        assert meta["owner_profile_id"] == "default"
+        assert meta["store_id"] == "profile:default"
+
+        source = connection.execute(
+            "SELECT owner_profile_id FROM sources WHERE id = ?", (LOCAL_SOURCE_ID,)
+        ).fetchone()
+        assert source["owner_profile_id"] == "default"
+        assert {
+            str(row["owner_profile_id"])
+            for row in connection.execute("SELECT owner_profile_id FROM calendars")
+        } == {"default"}
+        assert _legacy_count(connection, "calendars", "owner_profile_id") == 0
+        assert _legacy_count(connection, "events", "owner_profile_id") == 0
+        assert _legacy_count(connection, "change_log", "actor") == 0
+
+        context = connection.execute("SELECT * FROM change_context WHERE id = 1").fetchone()
+        assert context["origin"] == "system"
+        assert context["actor"] == "default"
+        assert context["batch_id"] == "batch-v3"
+        assert context["suppress"] == 0
+
+        actors = [str(row["actor"]) for row in connection.execute("SELECT actor FROM change_log")]
+        assert actors.count("default") == 53
+        assert actors.count("other") == 2
+
+        backups = _backups(path)
+        assert len(backups) == 1
+        assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
+        backup = sqlite3.connect(backups[0])
+        backup.row_factory = sqlite3.Row
+        try:
+            assert _meta(backup)["owner_profile_id"] == ".hermes"
+            assert _meta(backup)["store_id"] == "profile:.hermes"
+            assert _legacy_count(backup, "events", "owner_profile_id") == 53
+            assert _legacy_count(backup, "change_log", "actor") == 53
+        finally:
+            backup.close()
+
+        # A second open is a no-op and does not create a second backup.
+        again = migrate(
+            connection,
+            store_scope="profile",
+            store_id="profile:default",
+            owner_profile_id="default",
+        )
+        assert again == 4
+        assert len(_backups(path)) == 1
+    finally:
+        connection.close()
+
+
+def test_v4_does_not_touch_a_correctly_named_store_or_create_a_backup(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "calendar.db"
+    connection = _v3_profile_store(path, owner="coding", legacy_actors=False)
+    try:
+        before = _table_counts(connection)
+
+        migrate(
+            connection,
+            store_scope="profile",
+            store_id="profile:coding",
+            owner_profile_id="coding",
+        )
+
+        assert _table_counts(connection) == before
+        meta = _meta(connection)
+        assert meta["schema_version"] == "4"
+        assert meta["owner_profile_id"] == "coding"
+        assert meta["store_id"] == "profile:coding"
+        assert _legacy_count(connection, "events", "owner_profile_id") == 0
+        actors = {str(row["actor"]) for row in connection.execute("SELECT actor FROM change_log")}
+        assert actors == {"coding", "other"}
+        assert _backups(path) == []
+    finally:
+        connection.close()
+
+
+def test_v4_fresh_store_creates_no_backup(tmp_path: Path) -> None:
+    path = tmp_path / "calendar.db"
+    connection = connect(path)
+    try:
+        migrate(
+            connection,
+            store_scope="profile",
+            store_id="profile:default",
+            owner_profile_id="default",
+        )
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert _backups(path) == []
+    finally:
+        connection.close()
+
+
+def test_v4_global_store_bumps_the_version_without_a_rewrite(tmp_path: Path) -> None:
+    path = tmp_path / "calendar-global.db"
+    connection = connect(path)
+    try:
+        migrate(connection, store_scope="global", store_id="global", owner_profile_id="")
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert _meta(connection)["schema_version"] == "4"
+        assert _backups(path) == []
+    finally:
+        connection.close()
+
+
+def test_v4_backup_failure_aborts_and_leaves_the_store_untouched(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "calendar.db"
+    connection = _v3_profile_store(path)
+    real_backup = migrations._backup_database
+
+    def failing_backup(_connection: sqlite3.Connection) -> Path:
+        raise MigrationError("cannot create the pre-v4 backup (test)")
+
+    monkeypatch.setattr(migrations, "_backup_database", failing_backup)
+    try:
+        with pytest.raises(MigrationError, match="cannot create the pre-v4 backup"):
+            migrate(
+                connection,
+                store_scope="profile",
+                store_id="profile:default",
+                owner_profile_id="default",
+            )
+
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert _meta(connection)["owner_profile_id"] == ".hermes"
+        assert _legacy_count(connection, "events", "owner_profile_id") == 53
+        assert int(connection.execute("SELECT count(*) FROM change_log").fetchone()[0]) == 55
+        assert _backups(path) == []
+
+        monkeypatch.setattr(migrations, "_backup_database", real_backup)
+        migrate(
+            connection,
+            store_scope="profile",
+            store_id="profile:default",
+            owner_profile_id="default",
+        )
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert _legacy_count(connection, "events", "owner_profile_id") == 0
+    finally:
+        connection.close()
+
+
+def test_v4_concurrent_first_open_applies_once(tmp_path: Path) -> None:
+    path = tmp_path / "calendar.db"
+    builder = _v3_profile_store(path)
+    builder.close()
+
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def open_once() -> None:
+        connection = connect(path)
+        try:
+            barrier.wait(timeout=5)
+            migrate(
+                connection,
+                store_scope="profile",
+                store_id="profile:default",
+                owner_profile_id="default",
+            )
+        except BaseException as exc:  # pragma: no cover - reported below
+            errors.append(exc)
+        finally:
+            connection.close()
+
+    threads = [threading.Thread(target=open_once) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+
+    assert errors == []
+    connection = connect(path)
+    try:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert _legacy_count(connection, "events", "owner_profile_id") == 0
+        assert int(connection.execute("SELECT count(*) FROM change_log").fetchone()[0]) == 55
+    finally:
+        connection.close()
+    assert len(_backups(path)) == 1
+
+
+def test_v4_backup_write_failure_aborts_the_migration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "calendar.db"
+    connection = _v3_profile_store(path)
+
+    def missing_directory(_database: Path) -> Path:
+        return tmp_path / "missing" / "calendar.db.pre-v4-fixed.bak"
+
+    monkeypatch.setattr(migrations, "_backup_path", missing_directory)
+    try:
+        with pytest.raises(MigrationError, match="cannot create the pre-v4 backup"):
+            migrate(
+                connection,
+                store_scope="profile",
+                store_id="profile:default",
+                owner_profile_id="default",
+            )
+
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert _legacy_count(connection, "events", "owner_profile_id") == 53
+        assert int(connection.execute("SELECT count(*) FROM change_log").fetchone()[0]) == 55
+        assert _backups(path) == []
+    finally:
+        connection.close()
+
+
+def test_v4_in_memory_store_with_legacy_rows_aborts(
+    tmp_path: Path,
+) -> None:
+    connection = _v3_profile_store(Path(":memory:"))
+    # Attaching a file database also covers the loop over database_list rows
+    # when ``main`` has no backing file.
+    connection.execute("ATTACH DATABASE ? AS extra", (str(tmp_path / "extra.db"),))
+    try:
+        with pytest.raises(MigrationError, match="in-memory"):
+            migrate(
+                connection,
+                store_scope="profile",
+                store_id="profile:default",
+                owner_profile_id="default",
+            )
+
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert _legacy_count(connection, "events", "owner_profile_id") == 53
+    finally:
+        connection.close()
+
+
+def test_v4_never_overwrites_an_existing_backup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "calendar.db"
+    connection = _v3_profile_store(path)
+    stamp = "20260101T000000123456Z"
+    existing = path.with_name(f"{path.name}.pre-v4-{stamp}.bak")
+    existing.write_bytes(b"older backup")
+
+    class _FixedDatetime:
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            del tz
+            return datetime(2026, 1, 1, 0, 0, 0, 123456, tzinfo=UTC)
+
+    monkeypatch.setattr(migrations, "datetime", _FixedDatetime)
+    try:
+        migrate(
+            connection,
+            store_scope="profile",
+            store_id="profile:default",
+            owner_profile_id="default",
+        )
+
+        assert existing.read_bytes() == b"older backup"
+        backups = _backups(path)
+        assert len(backups) == 2
+        fresh = [item for item in backups if item != existing]
+        assert len(fresh) == 1
+        assert stat.S_IMODE(fresh[0].stat().st_mode) == 0o600
+    finally:
+        connection.close()
