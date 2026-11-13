@@ -15,7 +15,8 @@ import time
 from collections.abc import Callable
 
 from ..db.reminders import ReminderStore
-from ..db.store import open_global_store, open_profile_store, profile_name
+from ..db.store import open_global_store, open_profile_store
+from ..profile_identity import current_profile_id
 from .adapters import Notifier
 from .engine import ReminderEngine
 from .models import NotificationSettings, TickResult
@@ -30,7 +31,7 @@ def run_tick(
     rng: Callable[[], float] = random.random,
 ) -> TickResult:
     """Open the active profile store, run one tick, and close everything."""
-    profile_id = profile_name()
+    profile_id = current_profile_id()
     profile_connection = open_profile_store()
     global_connection: sqlite3.Connection | None = None
     try:

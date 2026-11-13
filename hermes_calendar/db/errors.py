@@ -20,6 +20,10 @@ class StoreScopeError(DatabaseError):
     """The store's ``schema_meta.store_scope`` disagrees with the requested one."""
 
 
+class MigrationError(DatabaseError):
+    """A schema migration could not run safely and the store was left untouched."""
+
+
 class RepositoryError(DatabaseError):
     """Base class for repository operation failures."""
 

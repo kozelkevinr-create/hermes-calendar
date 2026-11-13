@@ -18,6 +18,7 @@ from typing import Any
 from . import __version__
 from .hermes.tools import TOOL_SPECS, TOOLSET
 from .plugin_storage import global_dir, profile_dir
+from .profile_identity import current_profile_id
 from .reminders.ticker import maybe_start_in_process_ticker
 from .shared_store_check import verify_shared
 
@@ -54,7 +55,23 @@ def calendar_status(_args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
     """
     profile = profile_dir(PLUGIN_NAME)
     global_ = global_dir(PLUGIN_NAME)
-    shared = verify_shared(PLUGIN_NAME, profile.parent.parent.name)
+    try:
+        shared = verify_shared(PLUGIN_NAME, current_profile_id())
+        shared_payload: dict[str, Any] = {
+            "ok": shared.ok,
+            "shared": shared.shared,
+            "peers_seen": list(shared.peers_seen),
+            "writable": shared.writable,
+            "detail": shared.detail,
+        }
+    except Exception as exc:  # the status tool must report a failure, never raise
+        shared_payload = {
+            "ok": False,
+            "shared": None,
+            "peers_seen": [],
+            "writable": False,
+            "detail": f"profile identity error: {exc}",
+        }
     payload: dict[str, Any] = {
         "plugin": PLUGIN_NAME,
         "version": __version__,
@@ -64,13 +81,7 @@ def calendar_status(_args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             "profile": _database_status(profile, PROFILE_DB_FILENAME),
             "global": _database_status(global_, GLOBAL_DB_FILENAME),
         },
-        "shared_store": {
-            "ok": shared.ok,
-            "shared": shared.shared,
-            "peers_seen": list(shared.peers_seen),
-            "writable": shared.writable,
-            "detail": shared.detail,
-        },
+        "shared_store": shared_payload,
     }
     return json.dumps(payload, sort_keys=True)
 
