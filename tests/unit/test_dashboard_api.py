@@ -162,14 +162,18 @@ def test_status_never_exposes_a_raw_exception(
 def test_calendars_are_scoped_and_the_global_store_has_one(
     client: TestClient,
 ) -> None:
-    empty = client.get(PREFIX + "/calendars", params={"scope": "profile"})
-    assert empty.status_code == 200
-    assert payload(empty) == {"ok": True, "scope": "profile", "count": 0, "calendars": []}
+    default = payload(client.get(PREFIX + "/calendars", params={"scope": "profile"}))
+    assert default["scope"] == "profile"
+    assert default["count"] == 1
+    assert default["calendars"][0]["name"] == "Personal"
 
     calendar_id = create_calendar(client)
     listed = payload(client.get(PREFIX + "/calendars", params={"scope": "profile"}))
-    assert listed["count"] == 1
-    assert listed["calendars"][0]["id"] == calendar_id
+    assert listed["count"] == 2
+    assert [calendar["id"] for calendar in listed["calendars"]] == [
+        default["calendars"][0]["id"],
+        calendar_id,
+    ]
 
     global_list = payload(client.get(PREFIX + "/calendars", params={"scope": "global"}))
     assert global_list["count"] == 1
@@ -957,7 +961,7 @@ def test_json_payload_is_deterministic_for_calendar_lists(client: TestClient) ->
 
     decoded = json.loads(response.text)
     assert decoded["ok"] is True
-    assert decoded["count"] == 1
+    assert decoded["count"] == 2
 
 
 def test_declared_content_length_over_limit_is_rejected(client: TestClient) -> None:

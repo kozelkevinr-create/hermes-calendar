@@ -15,6 +15,12 @@ app design needs (``reminder_lease`` and the content-free
 ``reminder_delivery_ledger``), which ``docs/DECISIONS.md`` records as
 coordination state rather than notification state.
 
+V3 adds no DDL. It seeds one ``Personal`` calendar into a profile store that has
+never held any calendar, so a client that can add events but not create
+calendars has somewhere to write. The seed is a data migration and reuses the
+existing ``calendars`` table, indexes, and change-capture triggers; the global
+store is not touched.
+
 Keeping each statement separate (rather than one ``executescript`` call) lets the
 migration runner execute the whole schema inside one ``BEGIN IMMEDIATE``
 transaction; ``executescript`` implicitly commits first.

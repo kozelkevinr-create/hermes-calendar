@@ -216,7 +216,9 @@ cap returns `payload_too_large`; an over-long string or array returns `invalid_a
 
 Every calendar/event route accepts `scope`, defaulting to `profile`.
 
-- `scope=profile` reads the signed-in profile's private store.
+- `scope=profile` reads the signed-in profile's private store. A profile store that has
+  never held a calendar is seeded with one local `Personal` calendar, so event creation
+  works even in a client that cannot create calendars.
 - `scope=global` reads the shared store. Hermes seed it with exactly one calendar
   (`cal_global`); additional calendars there return `conflict`.
 - A response's `scope` echoes the resolved store. Scope is part of identity: the same
@@ -582,6 +584,20 @@ HTTP 200
 {
   "calendars": [
     {
+      "color": null,
+      "created_utc": 1794505100,
+      "default_tz": "UTC",
+      "description": null,
+      "id": "cal_01a1d0d8-7c21-7b30-9e51-1f32a2c7b901",
+      "name": "Personal",
+      "owner_profile_id": "alice",
+      "read_only": false,
+      "remote_id": null,
+      "scope": "profile",
+      "source_id": "src_local",
+      "updated_utc": 1794505100
+    },
+    {
       "color": "#2F6FEB",
       "created_utc": 1794505216,
       "default_tz": "America/New_York",
@@ -596,7 +612,7 @@ HTTP 200
       "updated_utc": 1794505216
     }
   ],
-  "count": 1,
+  "count": 2,
   "ok": true,
   "scope": "profile"
 }
